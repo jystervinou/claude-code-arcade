@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# arcade — control the Claude Code statusline vivarium.
+ARCADE="$HOME/.arcade"
+
+# ArcadeSprites.ttf is an upgrade, never a prerequisite: mspacman draws with
+# Unicode glyphs without it. macOS looks in ~/Library/Fonts, Linux/fontconfig
+# in ~/.local/share/fonts.
+FONT_MAC="$HOME/Library/Fonts/ArcadeSprites.ttf"
+FONT_LINUX="$HOME/.local/share/fonts/ArcadeSprites.ttf"
+have_font() { [ -f "$FONT_MAC" ] || [ -f "$FONT_LINUX" ]; }
+
+case "$1" in
+  theme)
+    case "$2" in
+      aquarium|sea) printf 'sea\n' > "$ARCADE/theme"; echo "theme → aquarium 🐟" ;;
+      safari) printf 'safari\n' > "$ARCADE/theme"; echo "theme → safari 🦁" ;;
+      mspacman|pacman|arcade)
+        printf 'mspacman\n' > "$ARCADE/theme"
+        if have_font; then echo "theme → ms. pac-man (pixel sprites)"
+        else
+          echo "theme → ms. pac-man ᗤ·●ᗣ"
+          echo "  tip: arcade font install  — swaps these in for real pixel sprites"
+        fi ;;
+      frogger)
+        printf 'frogger\n' > "$ARCADE/theme"; echo "theme → frogger"
+        have_font || echo "  needs the sprite font — run: arcade font install"
+        ;;
+      *) echo "usage: arcade theme aquarium|safari|mspacman|frogger"; exit 1 ;;
+    esac ;;
+  font)
+    # ArcadeSprites.ttf is a plain user font: one small file in the user font
+    # dir, nothing system-level, removal reverts everything.
+    REPO="$(dirname "$(readlink "$ARCADE/arcaded.js" || echo "$ARCADE/arcaded.js")")"
+    case "$(uname -s)" in Darwin) DEST="$FONT_MAC" ;; *) DEST="$FONT_LINUX" ;; esac
+    case "$2" in
+      install)
+        mkdir -p "$(dirname "$DEST")"
+        cp "$REPO/ArcadeSprites.ttf" "$DEST" \
+          && echo "installed ${DEST/#$HOME/\~} — fully quit and reopen your terminal app to see the sprites" ;;
+      remove)
+        rm -f "$FONT_MAC" "$FONT_LINUX" && echo "removed ArcadeSprites.ttf — mspacman falls back to Unicode glyphs" ;;
+      status|'') if have_font; then echo "font:   installed"; else echo "font:   not installed (arcade font install)"; fi ;;
+      *) echo "usage: arcade font install|remove"; exit 1 ;;
+    esac ;;
+  play)
+    if [ "$2" = "global" ]; then
+      # F1/F2/F3 steer from ANY window (Claude Code's included) via a
+      # listen-only key monitor — see arcadekeys.swift for the fine print.
+      REPO="$(dirname "$(readlink "$ARCADE/arcaded.js" || echo "$ARCADE/arcaded.js")")"
+      exec swift "$REPO/arcadekeys.swift"
+    fi
+    NODE="$(command -v node 2>/dev/null)"
+    [ -x "$NODE" ] || for n in "$HOME/.volta/bin/node" /opt/homebrew/bin/node /usr/local/bin/node; do
+      [ -x "$n" ] && NODE="$n" && break
+    done
+    exec "$NODE" "$ARCADE/arcadectl.js" ;;
+  demo)
+    # The attract reel: when Claude goes quiet, play on instead of INSERT COIN.
+    case "$2" in
+      on) printf 'on\n' > "$ARCADE/demo"; echo "demo → on (the game plays itself while Claude is idle)" ;;
+      off) printf 'off\n' > "$ARCADE/demo"; echo "demo → off (idle shows INSERT COIN)" ;;
+      ''|status) echo "demo:   $(cat "$ARCADE/demo" 2>/dev/null || echo off)" ;;
+      *) echo "usage: arcade demo on|off"; exit 1 ;;
+    esac ;;
+  status)
+    echo "theme:  $(cat "$ARCADE/theme" 2>/dev/null || echo sea)"
+    if have_font; then echo "font:   installed (pixel sprites)"
+    else echo "font:   not installed — Unicode glyphs (arcade font install)"; fi
+    echo "demo:   $(cat "$ARCADE/demo" 2>/dev/null || echo off)"
+    p="$(cat "$ARCADE/pid" 2>/dev/null)"
+    if kill -0 "$p" 2>/dev/null; then echo "daemon: running (pid $p)"; else echo "daemon: stopped (statusline revives it)"; fi
+    echo "tanks:  $(ls "$ARCADE/tanks" 2>/dev/null | wc -l | tr -d ' ') session(s)"
+    if [ -f "$ARCADE/state.json" ]; then
+      s="$(cat "$ARCADE/state.json")"
+      # -n/p so a miss prints nothing rather than echoing the whole JSON back.
+      # Pre-split saves have a single "score" — report it as Ms. Pac-Man's.
+      pac="$(printf '%s' "$s" | sed -nE 's/.*"pac":([0-9]+).*/\1/p')"
+      [ -n "$pac" ] || pac="$(printf '%s' "$s" | sed -nE 's/.*"score":([0-9]+).*/\1/p')"
+      frog="$(printf '%s' "$s" | sed -nE 's/.*"frog":([0-9]+).*/\1/p')"
+      echo "pac:    ${pac:-0}"
+      echo "frog:   ${frog:-0}"
+    fi ;;
+  *)
+    echo "arcade — Claude Code Arcade: little games in the status line"
+    echo "  arcade theme aquarium|safari|mspacman|frogger  switch theme (live)"
+    echo "  arcade font install|remove                     pixel sprites (upgrades mspacman, needed by frogger)"
+    echo "  arcade play                                    joystick (this pane only)"
+    echo "  arcade play global                             F1/F2/F3 steer from any window"
+    echo "  arcade demo on|off                             attract reel: play on while Claude is idle"
+    echo "  arcade status                                  daemon + theme + sessions + scores" ;;
+esac

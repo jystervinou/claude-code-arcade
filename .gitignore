@@ -1,0 +1,7 @@
+# The sprite generator pipeline stays out of the repo — the built font ships,
+# the tooling that produced it doesn't.
+sprites-gen.js
+fontgen.py
+sprites/
+
+.DS_Store
