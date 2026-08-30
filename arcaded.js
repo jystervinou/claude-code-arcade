@@ -142,10 +142,41 @@ const FRUIT_EVERY_TICKS = 300;
 // ~2 cols/s once she turns, so 25 columns is about a twelve-second detour.
 const FRUIT_CHASE = 25;
 
+// Ghosts run a touch slower than her 0.2/tick, so she can just outrun them —
+// the cabinet's whole tension. Frightened ones crawl.
+const GHOST_SPEED = 0.15;
+const FRIGHT_SPEED = 0.1;
+const SCATTER_TICKS = 35; // 7s, then...
+const CHASE_TICKS = 100; // ...20s hunting. The arcade's opening cadence.
+
 function hash(s) {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
   return Math.abs(h);
+}
+
+// Where each ghost WANTS to be, in f.d space (columns from the right edge).
+// The four personalities are the game: Blinky hounds her, Pinky cuts her off,
+// Inky swings off Blinky's vector, Sue loses his nerve up close. Flattened
+// onto one line they stay recognisably themselves. Scatter sends each home to
+// its own corner instead. Nothing here is random — the previous code rolled a
+// die every tick to flip direction, which is what made four identical ghosts
+// twitch in place instead of hunt.
+function ghostTarget(f, herD, lap, scatter, blinky) {
+  // The playfield's last drawable column is lap - 1: a ghost sent to lap lands
+  // at screen x = -1 and silently isn't drawn. Every target is clamped, since
+  // Pinky's lead and Inky's doubled vector both overshoot the ends routinely.
+  const far = lap - 1;
+  const clamp = (t) => (t < 0 ? 0 : t > far ? far : t);
+  const corner = f.ghostIdx === 0 || f.ghostIdx === 2 ? 0 : far;
+  if (scatter) return corner;
+  const ahead = (n) => herD - n * pacDir; // n columns in front of her
+  switch (f.ghostIdx) {
+    case 0: return herD; // Blinky, straight at her
+    case 1: return clamp(ahead(4)); // Pinky, to where she is going
+    case 2: return clamp(2 * ahead(2) - (blinky ? blinky.d : herD)); // Inky, off Blinky
+    default: return Math.abs(f.d - herD) > 8 ? herD : corner; // Sue, bold far, shy near
+  }
 }
 
 let fish = []; // {d, speed, seaGlyph, safariGlyph, ghostIdx, hue, eaten, rev}
@@ -314,9 +345,20 @@ function fishCap() {
   return Math.max(10, Math.floor(maxCols / 7));
 }
 
+// The HUD steals these from the playfield. Both the simulation and every
+// renderer must agree on the result — they used to differ by 4 columns, which
+// put the far end of the maze off the edge of the screen.
+const HUD_SCORE_W = 12;
+const HUD_TROPHY_W = 7;
+const HUD_MIN_COLS = 50;
+
+function playWidth(cols) {
+  const Wt = Math.max(20, cols - MARGIN);
+  return Wt >= HUD_MIN_COLS ? Wt - HUD_SCORE_W - HUD_TROPHY_W : Wt;
+}
+
 function mazeWidth() {
-  const Wt = Math.max(20, maxCols - MARGIN);
-  return Wt >= 50 ? Wt - 15 : Wt;
+  return playWidth(maxCols);
 }
 
 // The 7-column trophy slot on the right of the HUD: fruits she has eaten, or
@@ -612,9 +654,9 @@ function renderSafariFor(cols) {
 // view; other widths just draw.
 function renderPacFor(cols, sprites) {
   const Wt = Math.max(20, cols - MARGIN);
-  const hud = Wt >= 50;
-  const scoreW = hud ? 12 : 0;
-  const trophyW = hud ? 7 : 0;
+  const hud = Wt >= HUD_MIN_COLS;
+  const scoreW = hud ? HUD_SCORE_W : 0;
+  const trophyW = hud ? HUD_TROPHY_W : 0;
   const W = Wt - scoreW - trophyW;
   const canonical = cols === maxCols;
   const lap = W - 1;
@@ -673,15 +715,18 @@ function renderPacFor(cols, sprites) {
   gums = gums.filter((gum) => {
     const gx = W - 2 - Math.round(gum.g);
     if (gx < 0 || gx > W - 1) return true;
-    if (!gumRoom(gx)) return true; // hidden this frame — keep it for later
-    if (gx === pos && dying === 0) {
+    // Eating is tested FIRST and by swept range, not by gx === pos. The old
+    // order let the spacing rule skip the whole check, so a gum sitting near
+    // another was invisible AND uneatable — she walked over it, nothing
+    // happened, and it reappeared later still uneaten.
+    if (justSwept(gx) && dying === 0) {
       if (!canonical) return true;
       fright = FRIGHT_TICKS;
       combo = 200;
       scores.pac += 50;
-      return false;
+      return false; // eaten — gone for good
     }
-    if (!taken[gx]) {
+    if (gumRoom(gx) && !taken[gx]) {
       cells[gx] = gumCell;
       taken[gx] = true;
       gumCols.push(gx);
@@ -721,7 +766,11 @@ function renderPacFor(cols, sprites) {
     cells[pos] = PAC_COLOR + DEATH_FRAMES[Math.min(DEATH_FRAMES.length - 1, Math.floor((DYING_TICKS - dying) / 2))] + PAC_WATER;
     taken[pos] = true;
     reserve(pos);
-  } else if (!(invuln > 0 && ticks % 2 === 0)) {
+  } else {
+    // She is ALWAYS drawn. The post-respawn grace period used to blink her at
+    // ticks % 2 — a 400ms cycle sampled by a ~1s statusline refresh, which
+    // aliases into her randomly vanishing for seconds at a time with no ghost
+    // anywhere near her. (The cabinet has no blinking invulnerability either.)
     // chomp per column, not per tick: the ~1s statusline refresh aliases any
     // time-based cycle into long stuck-open/stuck-closed streaks — keyed to
     // her position, every visible step is a visible chomp
@@ -734,11 +783,25 @@ function renderPacFor(cols, sprites) {
     reserve(pos);
   }
 
+  // A ghost whose cell is occupied shifts to the nearest free one instead of
+  // skipping the frame. Now that all four converge on her they overlap
+  // constantly, and a ghost that silently isn't drawn reads as teleporting.
+  const putGhost = (xi, glyph) => {
+    for (const off of [0, -1, 1, -2, 2, -3, 3]) {
+      const x = xi + off;
+      if (x < 0 || x > W - 1 || taken[x]) continue;
+      if (sprites && (x > W - 2 || taken[x + 1])) continue; // needs both cells
+      cells[x] = glyph;
+      taken[x] = true;
+      reserve(x);
+      return;
+    }
+  };
+
   for (const f of fish) {
     if (f.ghostIdx === null) continue; // fifth fish, not a ghost
     const xi = W - 2 - Math.round(f.d);
-    if (xi < 0 || xi > W - 1 || taken[xi]) continue;
-    if (sprites && (xi > W - 2 || taken[xi + 1])) continue; // needs both cells
+    if (xi < -3 || xi > W + 2) continue;
     const flashing = sprites && fright > 0 && fright < 6 && ticks % 2 === 1; // wears off
     const glyph = sprites
       ? f.eaten
@@ -754,9 +817,7 @@ function renderPacFor(cols, sprites) {
       : fright > 0
         ? flashing ? FLASH_COLOR : FRIGHT_COLOR
         : GHOST_COLORS[f.ghostIdx];
-    cells[xi] = color + glyph + PAC_WATER;
-    taken[xi] = true;
-    reserve(xi);
+    putGhost(xi, color + glyph + PAC_WATER);
   }
 
   if (fruit) {
@@ -790,9 +851,9 @@ function renderPacFor(cols, sprites) {
 // renderer: only the canonical (widest) view mutates the game.
 function renderFrogFor(cols) {
   const Wt = Math.max(20, cols - MARGIN);
-  const hud = Wt >= 50;
-  const scoreW = hud ? 12 : 0;
-  const trophyW = hud ? 7 : 0;
+  const hud = Wt >= HUD_MIN_COLS;
+  const scoreW = hud ? HUD_SCORE_W : 0;
+  const trophyW = hud ? HUD_TROPHY_W : 0;
   const W = Wt - scoreW - trophyW;
   const canonical = cols === maxCols;
   const fx = Math.min(W - 1, Math.round(frogD));
@@ -865,8 +926,8 @@ function renderFrogFor(cols) {
 // refresh aliasing whatever moment it samples.
 function renderAttractFor(cols, frog) {
   const Wt = Math.max(20, cols - MARGIN);
-  const hud = Wt >= 50;
-  const W = Wt - (hud ? 19 : 0);
+  const hud = Wt >= HUD_MIN_COLS;
+  const W = Wt - (hud ? HUD_SCORE_W + HUD_TROPHY_W : 0);
   const msg = W >= 27 ? 'I N S E R T   C O I N' : 'INSERT COIN';
   const age = ticks - lastEventTick - IDLE_ATTRACT; // ticks since attract began
   const on = age >= 20 || Math.floor(age / 5) % 2 === 1; // dim/bright twice (~4s), then steady
@@ -957,16 +1018,27 @@ function tick() {
   if (demo) demoBeat();
   // All speeds stay near 1 column/second: the statusline refreshes about once
   // a second, so anything faster reads as teleporting, not motion.
+  const lap = mazeWidth() - 1;
+  const herD = ((Math.round(pacD) % lap) + lap) % lap; // her spot in f.d space
+  // Scatter/chase alternates on the cabinet's opening cadence. This is what
+  // makes the ghosts read as hunting rather than milling about.
+  const scatter = ticks % (SCATTER_TICKS + CHASE_TICKS) < SCATTER_TICKS;
+  const blinky = fish.find((g) => g.ghostIdx === 0 && !g.eaten);
+
   for (const f of fish) {
     if (frogTheme) {
       f.d += f.speed; // steady traffic, no lane fatigue
     } else if (f.eaten) {
       f.d -= 0.4; // eyes hustle home to the right
-    } else if (fright > 0 && pacTheme) {
-      f.d = Math.max(0, f.d - 0.3); // panic! reverse, cowering at the right edge
+    } else if (pacTheme && f.ghostIdx !== null) {
+      if (fright > 0) {
+        // Panicked: away from her, and slow — this is the window where she hunts.
+        f.d += FRIGHT_SPEED * (f.d >= herD ? 1 : -1);
+      } else {
+        f.d += GHOST_SPEED * Math.sign(ghostTarget(f, herD, lap, scatter, blinky) - f.d);
+      }
     } else {
-      if (pacTheme && !f.eaten && Math.random() < 0.008) f.rev = !f.rev; // wanders, like the cabinet
-      f.d += f.speed * (pacTheme && f.rev ? -1 : 1);
+      f.d += f.speed;
       f.speed = Math.max(0.08, f.speed * 0.985);
     }
   }
