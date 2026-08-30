@@ -175,6 +175,7 @@ echo
 echo "  Then pick a game:"
 echo "    arcade theme mspacman     Ms. Pac-Man (the default)"
 echo "    arcade theme frogger      Frogger"
+echo "    arcade theme wopr         W.O.P.R. — shall we play a game?"
 echo "    arcade theme aquarium     fish"
 echo "    arcade theme safari       savanna"
 echo "    arcade demo on            keep playing while Claude is idle"

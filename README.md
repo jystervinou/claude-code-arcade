@@ -8,6 +8,9 @@ is doing. It works, the arcade plays.
 Ms. Pac-Man. Frogger. Or an aquarium and a safari, if you want something calmer.
 They play themselves — grab the joystick if you want, but you don't have to.
 
+Or WOPR, from WarGames, which types its way through the film while Claude works:
+the logon, the list of games, and a game of Global Thermonuclear War.
+
 ![Ms. Pac-Man running in the Claude Code status line](docs/ms-pacman.png)
 
 ## Setup
@@ -36,6 +39,7 @@ you're already using.
 ```
 arcade theme mspacman   Ms. Pac-Man
 arcade theme frogger    Frogger
+arcade theme wopr       W.O.P.R., typing its way through WarGames
 arcade theme aquarium   🐟🐠🐡🦐🦀🦞🪼 / 🦈🐋🐳🐬🐙🦑🐢🦭🐊
 arcade theme safari     🐒🦩🐍🦌🦂🦡🦅 / 🐘🦒🦏🦛🐆🦓🐃🦍🐊🐪
 arcade demo on          keep playing while Claude is idle
@@ -83,8 +87,8 @@ dead on macOS 26: the system copy always wins the name conflict.)
 Each glyph is drawn one square per pixel on a 16×16 grid, with color layers
 baked in — her bow is genuinely red, not tinted.
 
-Works on macOS and Linux. On Windows Terminal, stick to `mspacman`, which
-needs no font at all.
+Works on macOS and Linux. On Windows Terminal, stick to `mspacman` or `wopr`,
+neither of which needs a font at all.
 
 ## How it works
 
@@ -114,3 +118,14 @@ bash ~/.claude-code-arcade/uninstall.sh
 
 Puts your old statusline back, removes the CLI and the font, keeps your scores
 (add `--purge` to drop those too). Then restart your terminal.
+
+## Not affiliated
+
+An independent hobby project, released under the MIT licence. Not affiliated
+with, endorsed by, or sponsored by Anthropic; "Claude" and "Claude Code" are
+Anthropic's trademarks, used here only to say what this plugs into.
+
+The games it imitates belong to other people too — Ms. Pac-Man and Frogger to
+their respective rights holders, WarGames to its own — and nothing here is
+affiliated with any of them either. No original assets are used: the sprites
+are drawn from scratch and the WOPR screens are typed out as homage.

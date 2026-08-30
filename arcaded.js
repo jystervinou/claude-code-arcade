@@ -16,6 +16,8 @@
 //              sprite edition.)
 //   "frogger"  the frog crosses the line through Claude's traffic (its glyphs
 //              live only in the sprite font, so that one IS required).
+//   "wopr"     the WOPR terminal from WarGames: no game at all, a CRT typing
+//              out the film while Claude works, frozen when it is your turn.
 //
 // The simulation: touched files are ghosts. Claude's replies and Writes drop
 // power gums ahead of her; eating one panics the ghosts (blue, reversed) and
@@ -41,15 +43,41 @@ const TICK_MS = 200;
 const MARGIN = 5;
 const IDLE_EXIT_MS = 120_000;
 
-// Single instance: if the pid on file is alive, we're redundant.
-try {
-  const old = parseInt(fs.readFileSync(PID, 'utf8'), 10);
-  if (old && old !== process.pid) {
-    process.kill(old, 0);
-    process.exit(0);
+// Single instance. The old guard read the pid, found it dead, and wrote its
+// own — which loses a race it hits routinely: kill the daemon (or let it exit)
+// and the next few statusline refreshes ALL find the same stale pid, all decide
+// it is dead, and all start. Two daemons then write the same frame file from
+// two different worlds. On the creature themes that just looked like heavy
+// traffic; on WOPR it is two copies of the film alternating mid-sentence.
+//
+// So claim the file with an atomic exclusive create instead: whatever else is
+// racing, exactly one 'wx' succeeds. Everything else exits, and when in doubt
+// we exit too — a missing daemon is repaired by the next statusline refresh a
+// second later, whereas a duplicate one is never repaired at all.
+function claimPid() {
+  try {
+    fs.writeFileSync(PID, String(process.pid), { flag: 'wx' });
+    return true;
+  } catch {}
+  let old = 0;
+  try {
+    old = parseInt(fs.readFileSync(PID, 'utf8'), 10);
+  } catch {}
+  if (old === process.pid) return true;
+  if (old) {
+    try {
+      process.kill(old, 0);
+      return false; // it is alive and it got here first
+    } catch {}
+    // Stale. Clear it and stand down: the next refresh gets a clean create,
+    // rather than us racing the other stale-pid readers for it right now.
+    try {
+      fs.unlinkSync(PID);
+    } catch {}
   }
-} catch {}
-fs.writeFileSync(PID, String(process.pid));
+  return false;
+}
+if (!claimPid()) process.exit(0);
 
 // Aquarium: Reads spawn the small reef; Writes/Edits spawn the big beasts.
 const SMALL = ['🐟', '🐠', '🐡', '🦐', '🦀', '🦞', '🪼'];
@@ -127,6 +155,247 @@ const LOG_COLOR = '\x1b[0;33m' + PAC_BG;
 const TURTLE_COLOR = '\x1b[0;32m' + PAC_BG;
 const SQUASH_COLOR = '\x1b[0;91m' + PAC_BG;
 const SQUASH_TICKS = 10;
+
+// WOPR, from WarGames (1983): not a playfield at all, but a terminal printing
+// one character at a time while Claude works. Everything else here is a
+// creature simulation; this one is a conversation.
+//
+// It is NOT the green phosphor everyone remembers. David's IMSAI 8080 drove an
+// Electrohome monochrome CRT: pale cyan-white, sampled #8AD2FF, on a near-black
+// #262324. (The film's green screens are the missile silos and the NORAD desk
+// consoles, not WOPR's side of the conversation.) The bold/dim pair is lifted
+// from the INSERT COIN blink — the bold phase is the one that reads like a lit
+// CRT, and the dim one is what the blink drops to.
+const WOPR_ON = '\x1b[0;1;38;5;117m' + PAC_BG; // #87d7ff, the phosphor
+const WOPR_OFF = '\x1b[0;2;38;5;110m' + PAC_BG;
+const WOPR_CURSOR = '█'; // solid block, as in the film
+
+// Claude Code's statusline refreshInterval is in SECONDS and its floor is 1, so
+// there is no faster timer to ask for. The line does also repaint on events —
+// new messages, tool calls, debounced at 300ms — and WOPR types only while
+// Claude is working, which is when those are densest, so the sampling rate is
+// somewhere between 1 and 3 frames a second and not ours to set.
+//
+// What IS ours is characters per second, and the first cut of this got it
+// wrong in the interesting direction: 40 c/s put a whole clause on screen per
+// repaint, which sounds ideal and read as a blur — the line finished and was
+// gone before you could take it in. The constraint is not "is motion visible"
+// but "does a FINISHED line stay up long enough to read", and at 1 fps that
+// means seconds, not frames. Hence half the speed and twice the rest below.
+const WOPR_SPEED = parseFloat(process.env.ARCADE_WOPR_SPEED) || 1;
+const WOPR_SYS_RATE = (15 / 5) * WOPR_SPEED; // chars per 200ms tick
+const WOPR_USR_RATE = (7 / 5) * WOPR_SPEED; // a person, hunting for the keys
+const WOPR_HOLD = 12; // what a beat rests for when the script doesn't say
+// Every rest in the script is stretched by this and then floored. Two separate
+// knobs because they fix two separate complaints: the SCALE is why a finished
+// line stays up long enough to actually read it, and the FLOOR is why the
+// games list and the grade table can't rattle past — those beats ask for three
+// or four ticks each, which is under a second, and the eye never lands on them.
+// The scale is a multiplier rather than a bigger default so the script keeps
+// its emphasis: the last line of the film still rests five times as long as a
+// row of the timetable.
+const WOPR_HOLD_SCALE = 3;
+const WOPR_HOLD_MIN = 25; // 5s, the shortest a finished line is ever up
+
+// Rests scale with the speed knob too, so ARCADE_WOPR_SPEED fast-forwards the
+// whole arc rather than just the typing — the rests are most of its length.
+function woprRest(b) {
+  const h = b.h === undefined ? WOPR_HOLD : b.h;
+  return Math.ceil(Math.max(WOPR_HOLD_MIN, Math.round(h * WOPR_HOLD_SCALE)) / WOPR_SPEED);
+}
+
+// The launch code, brute-forced on the big board: three letters, four digits,
+// three letters. Joshua locks the ten positions ONE AT A TIME and out of order
+// (a frame at 1:44 shows 5-8 solid while 1-3 and 9 still churn), so the reveal
+// order is scattered rather than left to right.
+const WOPR_CODE = 'CPE1704TKS';
+const WOPR_CODE_ORDER = [4, 6, 5, 7, 2, 9, 0, 3, 8, 1];
+const WOPR_ROLL = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+// Both animated beats run on their own clocks, so they need scaling here too,
+// or ARCADE_WOPR_SPEED fast-forwards the whole arc except DEFCON — which then
+// sits alone on screen for its full quarter-minute.
+const WOPR_DEFCON_STEP = Math.max(1, Math.round(10 / WOPR_SPEED)); // 2s a rung
+const WOPR_LOCK_STEP = Math.max(1, Math.round(10 / WOPR_SPEED)); // 2s a character
+
+// The simulation cascade, every one answered WINNER:  NONE. The film's list runs
+// to 157; these are the ones careful transcribers agree on, the misspellings
+// (THEATERWIOE, AUSTRAILIAN, ISREAL) being the film's own and therefore kept.
+const WOPR_SCENARIOS = [
+  'U.S. FIRST STRIKE', 'USSR FIRST STRIKE', 'NATO / WARSAW PACT', 'FAR EAST STRATEGY',
+  'US USSR ESCALATION', 'MIDDLE EAST WAR', 'USSR CHINA ATTACK', 'INDIA PAKISTAN WAR',
+  'MEDITERRANEAN WAR', 'HONGKONG VARIANT', 'SEATO DECAPITATING', 'CUBAN PROVOCATION',
+  'ATLANTIC HEAVY', 'NICARAGUAN PREEMPTIVE', 'PACIFIC TERRITORIAL', 'BURMESE THEATERWIOE',
+  'TURKISH DECOY', 'ARABIAN THEATERWIDE', 'AUSTRAILIAN MANEUVER', 'SUDAN SURPRISE',
+  'ZAIRE ALLIANCE', 'ICELANDIC INCIDENT', 'ENGLISH ESCALATION', 'MIDDLE EAST HEAVY',
+  'MEXICAN TAKEOVER', 'SAUDI MANEUVER', 'AFRICAN TERRITORIAL', 'CHAD ALERT',
+  'ICELAND MAXIMUM', 'ISREAL DISCRETIONARY', 'THAI SUBVERSION', 'CAMBODIAN HEAVY',
+];
+
+// The script, in film order, looping at the end. Verified frame by frame
+// against Michael Walden's timecoded transcription (mw.rat.bz/wgterm), made to
+// reconstruct the screen's character generator, and cross-checked against three
+// independent recreations.
+//
+// `s` is WOPR and prints in ALL CAPS; `u` is David and echoes in the mixed case
+// he typed. That casing is the whole speaker cue — on one line there is nowhere
+// to put a label, and the film gives both sides the same colour anyway. `c`
+// continues the previous line (a prompt, then what he types into it), `h` is
+// the rest afterwards in ticks.
+//
+// The film's own typos are on the screen and they stay: INDENTIFICATION, "CITY
+// AND/OR COUNTY NAME" (county, not country), and "make mistak" — which really
+// is cut off mid-word, because Broderick stops typing to think.
+const WOPR_SCRIPT = [
+  // ── The Seattle school district computer (21:00). Not WOPR at all — the
+  //    break-in the film opens on, and the reason he goes hunting for a games
+  //    company's dial-up in the first place. The password really is on a slip
+  //    of paper by the secretary's desk, and it really is "pencil".
+  { s: 'PDP 11/270 PRB TIP # 45     TTY 34/984', h: 6 },
+  { s: 'WELCOME TO THE SEATTLE PUBLIC SCHOOL DISTRICT DATANET', h: 10 },
+  { s: 'PLEASE LOGON WITH USER PASSWORD:  ' },
+  { u: 'pencil', c: 1, h: 10 },
+  { s: 'PASSWORD VERIFIED', h: 10 },
+  { s: 'PLEASE ENTER STUDENT NAME:  ' },
+  { u: 'Lightman, David L.', c: 1, h: 10 },
+  { s: '     CLASS #    COURSE TITLE         GRADE    TEACHER   PERIOD ROOM', h: 4 },
+  { s: '   ------------------------------------------------------------------', h: 3 },
+  { s: '      S-202     BIOLOGY 2              F      LIGGET       3   214', h: 4 },
+  { s: '      E-314     ENGLISH 11B            D      TURMAN       5   172', h: 3 },
+  { s: '      H-221     WORLD HISTORY 11B      C      DWYER        2   108', h: 3 },
+  { s: '      M-106     TRIG 2                 B      DICKERSON    4   315', h: 3 },
+  { s: '      PE-02     PHYSICAL EDUCATION     C      COMSTOCK     1   GYM', h: 3 },
+  { s: '      M-122     CALCULUS 1             B      LOGAN        6   240', h: 5 },
+  { s: 'TO CHANGE ANY ITEM, MOVE CURSOR TO DESIRED POSITION' },
+  { s: 'AND ENTER NEW VALUE', h: 10 },
+  // The row reprints with the cursor parked in the grade column, and the A
+  // lands in it — the whole point of the scene, in one line.
+  { s: '      S-202     BIOLOGY 2              ' },
+  { u: 'A', c: 1, h: 4 },
+  { s: '      LIGGET       3   214', c: 1, h: 16 },
+  { s: 'PLEASE ENTER STUDENT NAME:  ' },
+  { u: 'Mack, Jennifer K.', c: 1, h: 10 },
+  { s: '     CLASS #    COURSE TITLE         GRADE    TEACHER   PERIOD ROOM', h: 4 },
+  { s: '   ------------------------------------------------------------------', h: 3 },
+  { s: '      S-202     BIOLOGY 2              F      LIGGET       3   214', h: 4 },
+  { s: '      E-325     ENGLISH 11B            A      ROBINSON     1   114', h: 6 },
+  { s: '      S-202     BIOLOGY 2              ' },
+  { u: 'A', c: 1, h: 4 },
+  { s: '      LIGGET       3   214', c: 1, h: 18 },
+
+  // ── The first dial-in (28:42). LOGON: is the machine; what follows is him.
+  { s: 'LOGON:  ' },
+  { u: '000001', c: 1, h: 8 },
+  { s: 'INDENTIFICATION NOT RECOGNIZED BY SYSTEM' },
+  { s: '--CONNECTION TERMINATED--', h: 12 },
+  { s: 'LOGON:  ' },
+  { u: 'Help Logon', c: 1, h: 6 },
+  { s: 'HELP NOT AVAILABLE', h: 10 },
+  { s: 'LOGON:  ' },
+  { u: 'Help Games', c: 1, h: 6 },
+  { s: "'GAMES' REFERS TO MODELS, SIMULATIONS AND GAMES" },
+  { s: 'WHICH HAVE TACTICAL AND STRATEGIC APPLICATIONS.', h: 12 },
+
+  // ── LIST GAMES (30:47). No header line, and a blank line before the last
+  //    one — the pause before the punchline is in the film.
+  { u: 'List Games', h: 8 },
+  { s: "FALKEN'S MAZE", h: 2 },
+  { s: 'BLACK JACK', h: 2 },
+  { s: 'GIN RUMMY', h: 2 },
+  { s: 'HEARTS', h: 2 },
+  { s: 'BRIDGE', h: 2 },
+  { s: 'CHECKERS', h: 2 },
+  { s: 'CHESS', h: 2 },
+  { s: 'POKER', h: 2 },
+  { s: 'FIGHTER COMBAT', h: 2 },
+  { s: 'GUERRILLA ENGAGEMENT', h: 2 },
+  { s: 'DESERT WARFARE', h: 2 },
+  { s: 'AIR-TO-GROUND ACTIONS', h: 2 },
+  { s: 'THEATERWIDE TACTICAL WARFARE', h: 2 },
+  { s: 'THEATERWIDE BIOTOXIC AND CHEMICAL WARFARE', h: 6 },
+  { s: '', h: 5 },
+  { s: 'GLOBAL THERMONUCLEAR WAR', h: 16 },
+
+  // ── The backdoor (39:10) and the conversation everyone quotes.
+  { s: 'LOGON:  ' },
+  { u: 'Joshua', c: 1, h: 12 },
+  { s: 'GREETINGS PROFESSOR FALKEN.', h: 12 },
+  { u: 'Hello.', h: 10 },
+  { s: 'HOW ARE YOU FEELING TODAY?', h: 10 },
+  { u: "I'm fine.  How are you?", h: 10 },
+  { s: "EXCELLENT.  IT'S BEEN A LONG TIME.  CAN YOU EXPLAIN" },
+  { s: 'THE REMOVAL OF YOUR USER ACCOUNT NUMBER ON 6/23/73?', h: 12 },
+  { u: 'People sometimes make mistak', h: 12 },
+  { s: 'YES THEY DO.  SHALL WE PLAY A GAME?', h: 16 },
+  { u: 'Love to.  How about Global Thermonuclear War?', h: 12 },
+  { s: "WOULDN'T YOU PREFER A GOOD GAME OF CHESS?", h: 16 },
+  { u: "Later.  Let's play Global Thermonuclear War.", h: 12 },
+  { s: 'FINE.', h: 16 },
+
+  // ── Picking a side and naming the targets (41:00).
+  { s: 'WHICH SIDE DO YOU WANT?', h: 8 },
+  { s: '  1.    UNITED STATES', h: 4 },
+  { s: '  2.    SOVIET UNION', h: 6 },
+  { s: 'PLEASE CHOOSE ONE:  ' },
+  { u: '2', c: 1, h: 14 },
+  { s: 'AWAITING FIRST STRIKE COMMAND', h: 4 },
+  { s: '-----------------------------', h: 6 },
+  { s: 'PLEASE LIST PRIMARY TARGETS BY' },
+  { s: 'CITY AND/OR COUNTY NAME:', h: 8 },
+  { u: 'Las Vegas', h: 6 },
+  { u: 'Seattle', h: 14 },
+
+  // ── It calls back (50:00). Falken is dead and it does not care.
+  { s: 'GREETINGS PROFESSOR FALKEN.', h: 10 },
+  { u: 'Incorrect identification.  I am not Falken.', h: 4 },
+  { u: 'Falken is dead.', h: 12 },
+  { s: "I'M SORRY TO HEAR THAT, PROFESSOR.", h: 10 },
+  { s: "YESTERDAY'S GAME WAS INTERRUPTED.", h: 8 },
+  { s: 'ALTHOUGH PRIMARY GOAL HAS NOT YET' },
+  { s: 'BEEN ACHIEVED, SOLUTION IS NEAR.', h: 12 },
+  { u: 'What is the primary goal?', h: 10 },
+  { s: 'YOU SHOULD KNOW, PROFESSOR.  YOU' },
+  { s: 'PROGRAMMED ME.', h: 12 },
+  { u: 'What is the primary goal?', h: 10 },
+  { s: 'TO WIN THE GAME.', h: 18 },
+
+  // ── McKittrick's office (1:01:30). 28 hours, not the 61 some versions have.
+  { s: 'LOGON:  ' },
+  { u: 'Joshua', c: 1, h: 8 },
+  { s: 'GREETINGS PROFESSOR FALKEN.', h: 8 },
+  { u: 'Hello, are you still playing the game?', h: 10 },
+  { s: 'OF COURSE.  I SHOULD REACH DEFCON 1 AND' },
+  { s: 'LAUNCH MY MISSILES IN 28 HOURS.', h: 14 },
+  { u: 'Is this a game or is it real?', h: 12 },
+  { s: "WHAT'S THE DIFFERENCE?", h: 18 },
+
+  // ── NORAD walks down the ladder while the silos wait for codes.
+  { fx: 'defcon' },
+  { s: 'MISSILES ENABLED', h: 4 },
+  { s: '----------------', h: 4 },
+  { s: 'TARGET SELECTION:         COMPLETE', h: 3 },
+  { s: 'TIME ON TARGET SEQUENCE:  COMPLETE', h: 3 },
+  { s: 'YIELD SELECTION:          COMPLETE', h: 5 },
+  { s: 'C H A N G E S   L O C K E D   O U T', h: 10 },
+  { s: 'LAUNCH TIME: >> AWAITING CODES <<', h: 12 },
+  { fx: 'codes' },
+  { s: 'LAUNCH ORDER CONFIRMED', h: 18 },
+
+  // ── David makes it play itself.
+  { u: 'List Games', h: 6 },
+  { s: 'GLOBAL THERMONUCLEAR WAR', h: 8 },
+  { s: '** GAME ROUTINE RUNNING **', h: 12 },
+  ...WOPR_SCENARIOS.map((n) => ({ s: n + '   WINNER:  NONE', h: 3 })),
+
+  // ── The big board, 1:46:42. No period after FALKEN here, and his HELLO is
+  //    in caps — this screen is NORAD's, not his bedroom's.
+  { s: '', h: 6 },
+  { s: 'GREETINGS PROFESSOR FALKEN', h: 12 },
+  { u: 'HELLO', h: 12 },
+  { s: 'A STRANGE GAME.', h: 8 },
+  { s: 'THE ONLY WINNING MOVE IS', h: 6 },
+  { s: 'NOT TO PLAY.', h: 25 },
+  { s: 'HOW ABOUT A NICE GAME OF CHESS?', h: 35 },
+];
 
 // A fright window has to survive the statusline's ~1/second refresh to mean
 // anything. At 20 ticks it was 4 seconds — three or four sampled frames — so
@@ -240,6 +509,17 @@ const dotTrail = new Map(); // cols -> {lo, hi, last, W}
 let frogD = 0; // cols from the LEFT bank
 let squash = 0;
 let homes = 0;
+
+// WOPR world state: where the teletype has got to. Deliberately LOGICAL — which
+// beat, how many characters of it — and never per-width, because render() runs
+// once for every distinct terminal width open and all of them have to be showing
+// the same moment of the same conversation. Each width wraps it for itself.
+let woprBeat = 0;
+let woprChars = 0; // fractional — the reveal accumulates characters per tick
+let woprHold = 0;
+let woprLine = ''; // what is already committed on the line being printed
+let woprFx = null; // per-tick state for the two animated beats
+let woprBlinkFrom = 0; // tick the current line began, so the caret blinks from lit
 
 try {
   const s = JSON.parse(fs.readFileSync(STATE, 'utf8'));
@@ -963,6 +1243,171 @@ function renderAttractFor(cols, frog) {
   writeFrame(cols, line + '\x1b[0m');
 }
 
+// The caret blinks the whole time, typing or idle. One second lit, one second
+// dark — and that is deliberately SLOWER than a real cursor, because slowing it
+// down is what makes it look fast.
+//
+// We write frames five times a second but the statusline only SAMPLES them,
+// about once a second while Claude is idle, which is exactly when someone is
+// sitting looking at it. A blink faster than the sampler cannot be shown; it
+// beats against it instead. Measured, at one sample a second: a 0.4s phase
+// reads as a 4.4s blink, 0.6s as a 6.0s blink, and 0.8s and 1.2s as visible
+// jitter. Matching the phase to the sample period gives #.#.#.#.# — a change
+// on every single repaint, the fastest a 1fps display can physically show.
+// So this tracks refreshInterval (1s) rather than any real terminal's ~0.5s.
+//
+// The phase counts from the START OF THE CURRENT LINE rather than the wall
+// clock, and starts lit, so a line can never land with the caret dark and sit
+// there — which is what made it read as not blinking at all.
+const WOPR_BLINK = Math.round(1000 / TICK_MS); // one statusline refresh
+function woprCaret() {
+  return Math.floor((ticks - woprBlinkFrom) / WOPR_BLINK) % 2 === 0 ? WOPR_CURSOR : ' ';
+}
+
+function woprText(b) {
+  return b.s !== undefined ? b.s : b.u !== undefined ? b.u : '';
+}
+
+function woprRoll() {
+  return WOPR_ROLL[Math.floor(Math.random() * WOPR_ROLL.length)];
+}
+
+function woprFxInit(kind) {
+  if (kind === 'defcon') return { kind, t: 0, n: 5 };
+  return { kind, t: 0, locked: 0, roll: WOPR_CODE.split('').map(() => woprRoll()) };
+}
+
+// Move to the next beat, wrapping the script. A `c` beat carries on the line the
+// last one was printing — a prompt, then what he types into it — so LOGON: and
+// Joshua arrive on one line at two different speeds. Anything else starts fresh.
+function woprNext() {
+  const done = woprText(WOPR_SCRIPT[woprBeat]);
+  woprBeat = (woprBeat + 1) % WOPR_SCRIPT.length;
+  const next = WOPR_SCRIPT[woprBeat];
+  woprLine = next.c ? woprLine + done : '';
+  woprFx = next.fx ? woprFxInit(next.fx) : null;
+  const text = next.fx ? '' : woprText(next);
+  // Reveal the first slice immediately rather than starting at zero. A beat
+  // opening empty left one whole tick of blank line, and at the statusline's
+  // ~1fps that was landing in roughly one sampled frame in five — the screen
+  // read as going dark between sentences.
+  woprChars = text.length ? Math.min(text.length, next.s !== undefined ? WOPR_SYS_RATE : WOPR_USR_RATE) : 0;
+  // A beat with nothing to type never reaches the rest below, so it takes its
+  // rest here — otherwise the deliberate blank before GLOBAL THERMONUCLEAR WAR
+  // falls straight through and the pause never lands.
+  woprHold = !next.fx && text.length === 0 ? woprRest(next) : 0;
+  woprBlinkFrom = ticks; // every line opens with the caret lit
+}
+
+// One tick of printing. The random churn in the code hunt is rolled HERE rather
+// than in the renderer: the renderer runs once per open terminal width, and two
+// windows rolling their own characters would disagree about what the screen says.
+function woprTick() {
+  const b = WOPR_SCRIPT[woprBeat];
+  if (b.fx) {
+    if (!woprFx) woprFx = woprFxInit(b.fx);
+    const f = woprFx;
+    f.t++;
+    if (f.kind === 'defcon') {
+      if (f.t % WOPR_DEFCON_STEP === 0 && f.n > 1) f.n--;
+      if (f.n === 1 && f.t > WOPR_DEFCON_STEP * 6) woprNext();
+      return;
+    }
+    // Re-roll every other tick: at 400ms the churn survives the statusline's
+    // sampling, where a per-tick roll would just alias into a blur.
+    if (f.t % 2 === 0) {
+      for (let i = 0; i < f.roll.length; i++) {
+        if (WOPR_CODE_ORDER.indexOf(i) >= f.locked) f.roll[i] = woprRoll();
+      }
+    }
+    if (f.t % WOPR_LOCK_STEP === 0 && f.locked < WOPR_CODE.length) f.locked++;
+    if (f.locked === WOPR_CODE.length && f.t > WOPR_CODE.length * WOPR_LOCK_STEP + WOPR_LOCK_STEP * 2) woprNext();
+    return;
+  }
+  const text = woprText(b);
+  if (woprChars < text.length) {
+    woprChars = Math.min(text.length, woprChars + (b.s !== undefined ? WOPR_SYS_RATE : WOPR_USR_RATE));
+    if (woprChars >= text.length) woprHold = woprRest(b);
+    return;
+  }
+  if (woprHold > 0) {
+    woprHold--;
+    return;
+  }
+  woprNext();
+}
+
+// The two beats that are animation rather than text: NORAD walking down the
+// DEFCON ladder, and Joshua brute-forcing the launch code — ten positions going
+// solid one at a time and out of order, the rest still rolling.
+function woprFxRow(f, W) {
+  let body = '';
+  let vis = 0;
+  if (f.kind === 'defcon') {
+    body = WOPR_ON + 'DEFCON  ';
+    vis = 8;
+    for (const n of [5, 4, 3, 2, 1]) {
+      if (n !== 5) {
+        body += ' ';
+        vis++;
+      }
+      body += (n >= f.n ? WOPR_ON : WOPR_OFF) + n;
+      vis++;
+    }
+    return { body, vis };
+  }
+  if (W >= 34) {
+    body = WOPR_ON + 'LAUNCH CODE:  ';
+    vis = 14;
+  }
+  for (let i = 0; i < WOPR_CODE.length; i++) {
+    if (i) {
+      body += ' ';
+      vis++;
+    }
+    const locked = WOPR_CODE_ORDER.indexOf(i) < f.locked;
+    body += (locked ? WOPR_ON : WOPR_OFF) + (locked ? WOPR_CODE[i] : f.roll[i]);
+    vis++;
+  }
+  return { body, vis };
+}
+
+// Your turn: the cabinet stops where it stood. The MESSAGE blinks twice as the
+// reply ends and then holds steady — the same cadence as INSERT COIN, and for
+// the same reason, which is that a statusline still flashing while you type is
+// a distraction. The caret keeps its own blink through all of it, which is the
+// one thing on screen that should still be moving while the machine waits.
+function renderWoprIdleFor(cols) {
+  const W = Math.max(20, cols - MARGIN);
+  const msg = W >= 24 ? 'SHALL WE PLAY A GAME?' : 'SHALL WE PLAY?';
+  const age = ticks - lastEventTick - IDLE_ATTRACT;
+  const on = age >= 20 || Math.floor(age / 5) % 2 === 1;
+  const pad = Math.max(0, Math.floor((W - msg.length - 1) / 2));
+  const line = WOPR_ON + ' '.repeat(pad) + (on ? WOPR_ON : WOPR_OFF) + msg + WOPR_ON + woprCaret();
+  writeFrame(cols, line + WOPR_ON + ' '.repeat(Math.max(0, W - pad - msg.length - 1)) + '\x1b[0m');
+}
+
+// One row of a scrolling terminal. The wrap is a dumb hard break at the edge
+// rather than a word wrap, because the film's spacing IS the text — two spaces
+// after every period, the indented menu items — and word wrapping eats it.
+function renderWoprFor(cols, idle) {
+  if (idle) return renderWoprIdleFor(cols);
+  const W = Math.max(20, cols - MARGIN);
+  const b = WOPR_SCRIPT[woprBeat];
+  let body;
+  let vis;
+  if (b.fx && woprFx) {
+    ({ body, vis } = woprFxRow(woprFx, W));
+  } else {
+    const full = woprLine + woprText(b).slice(0, Math.floor(woprChars));
+    const Wc = Math.max(8, W - 1); // one column kept for the cursor
+    const row = full.slice(Math.floor(Math.max(0, full.length - 1) / Wc) * Wc);
+    body = WOPR_ON + row + woprCaret();
+    vis = row.length + 1;
+  }
+  writeFrame(cols, body + WOPR_ON + ' '.repeat(Math.max(0, W - vis)) + '\x1b[0m');
+}
+
 let prevWidthsKey = '';
 
 function render() {
@@ -972,11 +1417,14 @@ function render() {
   maxCols = Math.max(...widths);
   const t = theme();
   const frog = /frog/.test(t);
+  const wopr = /wopr/.test(t);
+  const woprIdle = wopr && attractNow() && !demoOn();
   // demoing already means attract fired and demo mode took it over: the reel
   // draws the game, not the coin screen.
   const attract = !demoing && (isPacTheme(t) || frog) && attractNow();
   for (const cols of widths) {
-    if (attract) renderAttractFor(cols, frog);
+    if (wopr) renderWoprFor(cols, woprIdle);
+    else if (attract) renderAttractFor(cols, frog);
     else if (isPacTheme(t)) renderPacFor(cols, spriteFont());
     else if (frog) renderFrogFor(cols);
     else if (/safari/.test(t)) renderSafariFor(cols);
@@ -1020,6 +1468,7 @@ function tick() {
   const t = theme();
   const pacTheme = isPacTheme(t);
   const frogTheme = /frog/.test(t);
+  const woprTheme = /wopr/.test(t);
   // Attract mode: with Claude quiet (waiting on the user, or a session just
   // opened), the game freezes and the statusline says INSERT COIN. The first
   // transcript event unfreezes it exactly where it stopped.
@@ -1029,6 +1478,21 @@ function tick() {
   // Claude spoke again, or the user switched demo off mid-reel.
   if (demo && !demoing) enterDemo();
   else if (!demo && demoing) exitDemo();
+  // WOPR is a terminal, not a playfield: none of the maze simulation below
+  // applies to it. It prints only while Claude is working — the same rule that
+  // freezes the other cabinets on INSERT COIN when it is your turn — and the
+  // demo reel keeps it printing through the quiet.
+  if (woprTheme) {
+    const idle = attractNow() && !demoOn();
+    if (!idle) woprTick();
+    // Returning early skips the save at the bottom of tick(), so do it here:
+    // switching to WOPR must not strand the last few seconds of a Ms. Pac-Man
+    // run unwritten. WOPR itself keeps nothing — a fresh daemon starts at the
+    // logon screen, which is where the film starts too.
+    if (ticks % 25 === 0) saveState();
+    render();
+    return;
+  }
   if (attract && !demo) {
     if (ticks % 25 === 0) saveState();
     render();

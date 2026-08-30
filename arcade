@@ -25,7 +25,11 @@ case "$1" in
         printf 'frogger\n' > "$ARCADE/theme"; echo "theme → frogger"
         have_font || echo "  needs the sprite font — run: arcade font install"
         ;;
-      *) echo "usage: arcade theme aquarium|safari|mspacman|frogger"; exit 1 ;;
+      # No font, no sprites, no game — a terminal. Plain ASCII, so this one also
+      # works on Windows Terminal.
+      wopr|wargames)
+        printf 'wopr\n' > "$ARCADE/theme"; echo "theme → w.o.p.r.  shall we play a game?" ;;
+      *) echo "usage: arcade theme aquarium|safari|mspacman|frogger|wopr"; exit 1 ;;
     esac ;;
   font)
     # ArcadeSprites.ttf is a plain user font: one small file in the user font
@@ -82,10 +86,10 @@ case "$1" in
     fi ;;
   *)
     echo "arcade — Claude Code Arcade: little games in the status line"
-    echo "  arcade theme aquarium|safari|mspacman|frogger  switch theme (live)"
-    echo "  arcade font install|remove                     pixel sprites (upgrades mspacman, needed by frogger)"
-    echo "  arcade play                                    joystick (this pane only)"
-    echo "  arcade play global                             F1/F2/F3 steer from any window"
-    echo "  arcade demo on|off                             attract reel: play on while Claude is idle"
-    echo "  arcade status                                  daemon + theme + sessions + scores" ;;
+    echo "  arcade theme aquarium|safari|mspacman|frogger|wopr  switch theme (live)"
+    echo "  arcade font install|remove                          pixel sprites (upgrades mspacman, needed by frogger)"
+    echo "  arcade play                                         joystick (this pane only)"
+    echo "  arcade play global                                  F1/F2/F3 steer from any window"
+    echo "  arcade demo on|off                                  attract reel: play on while Claude is idle"
+    echo "  arcade status                                       daemon + theme + sessions + scores" ;;
 esac
