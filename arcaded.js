@@ -128,10 +128,18 @@ const TURTLE_COLOR = '\x1b[0;32m' + PAC_BG;
 const SQUASH_COLOR = '\x1b[0;91m' + PAC_BG;
 const SQUASH_TICKS = 10;
 
-const FRIGHT_TICKS = 20;
+// A fright window has to survive the statusline's ~1/second refresh to mean
+// anything. At 20 ticks it was 4 seconds — three or four sampled frames — so
+// the blue ghosts came and went without ever being seen. 30 ticks is 6s, the
+// cabinet's level-one fright, and stays under dropGum's 50-tick throttle so
+// fright still can't become endless.
+const FRIGHT_TICKS = 30;
 const DYING_TICKS = 12;
 const INVULN_TICKS = 25;
-const POWER_GUMS = [0.35, 0.8];
+// Four energizers, like the cabinet. Two of them only came back round on a
+// lap wrap, and a lap takes minutes once she starts doubling back: measured,
+// one gum eaten per ~80 seconds of play.
+const POWER_GUMS = [0.15, 0.35, 0.6, 0.8];
 const GUM_LIFE = 600;
 // The real Ms. Pac-Man roster and point values, in level order.
 const FRUITS = ['🍒', '🍓', '🍊', '🥨', '🍎', '🍐', '🍌'];
@@ -141,11 +149,16 @@ const FRUIT_EVERY_TICKS = 300;
 // How far behind her a fruit is still worth doubling back for. They close at
 // ~2 cols/s once she turns, so 25 columns is about a twelve-second detour.
 const FRUIT_CHASE = 25;
+// How far off a frightened ghost is still worth going after. Boosted she runs
+// 0.6/tick against a fleeing ghost's 0.06, so a sprint closes about 16 columns
+// inside one 30-tick window. That reach is the whole rule: go after anything
+// within it, ignore anything past it — the window expires either way.
+const FRIGHT_CHASE = 16;
 
 // Ghosts run a touch slower than her 0.2/tick, so she can just outrun them —
 // the cabinet's whole tension. Frightened ones crawl.
 const GHOST_SPEED = 0.15;
-const FRIGHT_SPEED = 0.1;
+const FRIGHT_SPEED = 0.06; // a crawl, as on the cabinet — she has to be able to catch them
 const SCATTER_TICKS = 35; // 7s, then...
 const CHASE_TICKS = 100; // ...20s hunting. The arcade's opening cadence.
 
@@ -702,6 +715,11 @@ function renderPacFor(cols, sprites) {
       fright = FRIGHT_TICKS;
       combo = 200;
       scores.pac += 50;
+      // A gum re-decides which way she faces, the way the cabinet reverses
+      // every ghost the instant you take one. Without clearing the cooldown
+      // she almost never could turn: fleeing is what carries her onto a gum
+      // in the first place, so the 25-tick block covered the whole window.
+      lastUturnTick = -9999;
     }
     // Visible until she has swept it, then GONE until the lap wraps and the
     // field refills — the same rule the dots follow. (This used to draw only
@@ -724,6 +742,7 @@ function renderPacFor(cols, sprites) {
       fright = FRIGHT_TICKS;
       combo = 200;
       scores.pac += 50;
+      lastUturnTick = -9999; // as above: let her turn and hunt straight away
       return false; // eaten — gone for good
     }
     if (gumRoom(gx) && !taken[gx]) {
@@ -1033,7 +1052,12 @@ function tick() {
     } else if (pacTheme && f.ghostIdx !== null) {
       if (fright > 0) {
         // Panicked: away from her, and slow — this is the window where she hunts.
-        f.d += FRIGHT_SPEED * (f.d >= herD ? 1 : -1);
+        // Cornered, though, never gone. Unclamped, a ghost fleeing left walked
+        // off the edge and straight into the cull below, so the one she was
+        // chasing evaporated mid-window and the hunt had no quarry left. A
+        // frightened ghost on the cabinet has nowhere to leave to either.
+        const flee = f.d + FRIGHT_SPEED * (f.d >= herD ? 1 : -1);
+        f.d = Math.min(mazeWidth() - 2, Math.max(0, flee));
       } else {
         f.d += GHOST_SPEED * Math.sign(ghostTarget(f, herD, lap, scatter, blinky) - f.d);
       }
@@ -1084,19 +1108,32 @@ function tick() {
       // helps: with ghosts both ways, reversing into the nearer one is worse
       // than running the gap she already has. Mid-fright they are food.
       const flee = fright === 0 && ahead <= 7 && behind > ahead;
+      // Mid-fright the ghosts stop being a threat and turn into dinner, and
+      // they run at half her speed — so a gum only pays out if she turns and
+      // chases one down. Without this she strolled straight past the blue
+      // ghosts and the 200/400/800/1600 combo never scored once in a session.
+      const hunt = !flee && fright > 0 && behind < ahead && behind <= FRIGHT_CHASE;
       // Fruit drifts rightward at exactly her own speed, so one ahead of her
       // can never be caught — it would lead her forever. A fruit BEHIND is the
       // catchable one: turn, and the two of them close at double speed. She
       // doubles back only if the way behind is clearer than the fruit is far.
       let chase = false;
-      if (!flee && fruit) {
+      if (!flee && !hunt && fruit) {
         const fd = (p - (mazeWidth() - 2 - Math.round(fruit.e))) * pacDir; // >0: ahead
         chase = fd < 0 && -fd <= FRUIT_CHASE && behind > -fd;
       }
-      if (flee || chase) {
+      if (flee || hunt || chase) {
         pacDir = -pacDir;
         lastUturnTick = ticks;
       }
+      // ...and she spends a boost on the hunt. Unboosted she gains 0.14/tick
+      // on a fleeing ghost — four columns in a whole window, which is why the
+      // 200/400/800/1600 combo never scored once. Sprinting triples her stride
+      // and puts the gulp in reach. Only the auto-pilot arms this: the gate
+      // above stands down for 30s after any joystick input, so a boost the
+      // player spent is never overwritten by one she gave herself.
+      const prey = hunt || chase ? behind : ahead;
+      if (fright > 0 && prey <= FRIGHT_CHASE) boost = Math.max(boost, fright);
     }
     pacD -= 0.2 * pacDir * (boost > 0 ? 3 : 1); // pacD counts leftward; default dir is right
     if (pacTheme) {
