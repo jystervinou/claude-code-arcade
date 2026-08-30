@@ -59,7 +59,9 @@ arcade play          # in a SPARE terminal pane: ←/→ steer, ↑ boost
 arcade play global   # F1 ←, F2 →, F3 boost from any window (macOS)
 ```
 
-`global` needs a one-time Accessibility grant, and on laptops it's fn+F1/F2/F3.
+`global` needs a one-time Accessibility grant. If your F-row does brightness
+and volume — Apple's default — those keys aren't F1/F2/F3 at all, so press
+fn+F1/F2/F3, or turn on "Use F1, F2, etc. keys as standard function keys".
 It watches exactly those three keys, can't swallow them, and sends nothing
 anywhere. Either way she goes back to playing herself ~30s after you stop.
 
