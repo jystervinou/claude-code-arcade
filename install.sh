@@ -72,8 +72,32 @@ if [ -e "$CLI" ] || [ -L "$CLI" ]; then
   fi
 fi
 
+# The statusline is the one key we take over, so this has to be exact about
+# three different situations: no statusline (just take it), one of ours (an
+# upgrade), and someone else's (ask). A fourth — settings.json that does not
+# parse — is a hard stop rather than a question, because the only way to write
+# a key into a file we cannot read is to replace the whole thing, and that
+# silently destroys every other setting in it. Not something to offer as [y/N].
 if [ -f "$SETTINGS" ]; then
-  cur="$("$NODE" -e 'try{const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(String((s.statusLine||{}).command||""))}catch{}' "$SETTINGS")"
+  cur="$("$NODE" -e '
+    const fs = require("fs");
+    let raw = "";
+    try { raw = fs.readFileSync(process.argv[1], "utf8"); } catch { process.exit(0); }
+    if (!raw.trim()) process.exit(0);
+    let s;
+    try { s = JSON.parse(raw); } catch { process.stdout.write("__BAD__"); process.exit(0); }
+    const sl = s && s.statusLine;
+    if (!sl) process.exit(0);
+    // A statusline with no command is still a statusline someone chose.
+    process.stdout.write(String(sl.command || "(a statusLine with no command field)"));
+  ' "$SETTINGS")"
+  if [ "$cur" = "__BAD__" ]; then
+    echo "~/.claude/settings.json is not valid JSON, so this installer cannot edit it." >&2
+    echo "Writing our one key would mean rewriting the whole file, and every other" >&2
+    echo "setting in it would be lost. Fix the JSON (a stray comma or comment is the" >&2
+    echo "usual cause) or move the file aside, then re-run." >&2
+    exit 1
+  fi
   case "$cur" in
     ""|*".arcade/statusline.sh"*) ;;
     *) WARN+=("You already have a statusline: $cur"
@@ -145,7 +169,19 @@ mkdir -p "$(dirname "$SETTINGS")"
 const fs = require('fs');
 const [file, backup] = process.argv.slice(2);
 let s = {};
-try { s = JSON.parse(fs.readFileSync(file, 'utf8')); } catch {}
+let raw = null;
+try { raw = fs.readFileSync(file, 'utf8'); } catch {}
+if (raw !== null && raw.trim()) {
+  // Belt and braces: the pre-flight already refused an unparseable file, but
+  // falling back to {} here would rewrite the user's whole config as our one
+  // key, so this must never be a silent catch.
+  try {
+    s = JSON.parse(raw);
+  } catch {
+    console.error('  settings.json is not valid JSON — refusing to overwrite it.');
+    process.exit(1);
+  }
+}
 const want = { type: 'command', command: '~/.arcade/statusline.sh', padding: 0, refreshInterval: 1 };
 const cur = s.statusLine;
 // Back up only a statusline that is not already ours, and only once: re-running
