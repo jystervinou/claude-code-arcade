@@ -50,11 +50,8 @@ rm -f "$HOME/Library/Fonts/ArcadeSprites.ttf" "$HOME/.local/share/fonts/ArcadeSp
 echo "  removed the CLI and the sprite font"
 
 if [ "$PURGE" = 1 ]; then
-  # Everything except the clone this script is running from — deleting a script
-  # mid-execution is not reliably safe, so that last step is left to you.
-  find "$ARCADE" -mindepth 1 -maxdepth 1 ! -name src -exec rm -rf {} + 2>/dev/null || true
+  rm -rf "$ARCADE"
   echo "  purged ~/.arcade (scores included)"
-  echo "  finish with:  rm -rf ~/.arcade"
 else
   rm -f "$ARCADE"/frame.* "$ARCADE/pid" "$ARCADE/input"
   rm -f "$ARCADE/arcaded.js" "$ARCADE/arcadectl.js" "$ARCADE/statusline.sh"

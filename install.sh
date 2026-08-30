@@ -10,10 +10,15 @@
 #                                       ~/.local/share/fonts)
 #   ~/.claude/settings.json             the statusLine key — and only that key;
 #                                       any previous value is backed up first
+#
+# Nothing is written until a pre-flight pass has checked every one of those
+# for something that isn't ours, and asked. ARCADE_FORCE=1 skips the asking.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARCADE="$HOME/.arcade"
+CLI="$HOME/.local/bin/arcade"
+SETTINGS="$HOME/.claude/settings.json"
 say() { printf '  %-12s %s\n' "$1" "$2"; }
 
 # The daemon needs Node. Probe PATH first, then the usual install locations —
@@ -32,6 +37,84 @@ if [ ! -x "${NODE:-}" ]; then
   exit 1
 fi
 
+case "$(uname -s)" in
+  Darwin) FONTDIR="$HOME/Library/Fonts" ;;
+  *) FONTDIR="$HOME/.local/share/fonts" ;;
+esac
+
+# ---------------------------------------------------------------- pre-flight
+# Collect everything that already exists and isn't obviously ours, then ask
+# once. Plenty of things live at ~/.arcade — this is not a name we own.
+WARN=()
+
+if [ -e "$ARCADE" ] && [ ! -d "$ARCADE" ]; then
+  echo "~/.arcade exists and is not a directory. Move it aside and re-run." >&2
+  exit 1
+fi
+if [ -d "$ARCADE" ] && [ -n "$(ls -A "$ARCADE" 2>/dev/null)" ]; then
+  # Ours if it carries any of the runtime's own files.
+  if [ -e "$ARCADE/arcaded.js" ] || [ -e "$ARCADE/statusline.sh" ] ||
+     [ -e "$ARCADE/state.json" ] || [ -e "$ARCADE/theme" ]; then
+    IS_UPGRADE=1
+  else
+    WARN+=("~/.arcade already exists and does NOT look like Claude Code Arcade."
+           "    It holds: $(ls -A "$ARCADE" | head -5 | tr '\n' ' ')"
+           "    Installing will add our files alongside whatever that is.")
+  fi
+fi
+
+# Another tool could own the name 'arcade' on PATH. A symlink that sits next to
+# an arcaded.js is a previous install of ours; anything else gets a question.
+if [ -e "$CLI" ] || [ -L "$CLI" ]; then
+  tgt="$(readlink "$CLI" 2>/dev/null || true)"
+  if [ -z "$tgt" ] || [ ! -e "$(dirname "$tgt")/arcaded.js" ]; then
+    WARN+=("~/.local/bin/arcade already exists and isn't ours — it would be replaced.")
+  fi
+fi
+
+if [ -f "$SETTINGS" ]; then
+  cur="$("$NODE" -e 'try{const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(String((s.statusLine||{}).command||""))}catch{}' "$SETTINGS")"
+  case "$cur" in
+    ""|*".arcade/statusline.sh"*) ;;
+    *) WARN+=("You already have a statusline: $cur"
+              "    It will be backed up to ~/.arcade/statusline.backup.json and restored on uninstall.") ;;
+  esac
+fi
+
+if [ ${#WARN[@]} -gt 0 ]; then
+  echo
+  echo "  Hold on:"
+  echo
+  # Entries starting with a space are continuation lines, not new bullets.
+  for w in "${WARN[@]}"; do
+    case "$w" in
+      " "*) printf '  %s\n' "$w" ;;
+      *) printf '  - %s\n' "$w" ;;
+    esac
+  done
+  echo
+  # -r /dev/tty can pass where actually opening it fails (piped, no controlling
+  # terminal), so open it for real and let that be the test.
+  if [ "${ARCADE_FORCE:-0}" = 1 ]; then
+    echo "  ARCADE_FORCE=1 set — continuing."
+  elif { exec 3< /dev/tty; } 2>/dev/null; then
+    printf '  Continue? [y/N] '
+    read -r ans <&3 || ans=""
+    exec 3<&-
+    case "$ans" in
+      y|Y|yes|YES) ;;
+      *) echo "  Aborted. Nothing was written."; exit 1 ;;
+    esac
+  else
+    echo "  No terminal to ask on, so nothing was written."
+    echo "  Re-run from a terminal, or force it:"
+    echo "    ARCADE_FORCE=1 bash $SRC/install.sh"
+    exit 1
+  fi
+  echo
+fi
+
+# ------------------------------------------------------------------ install
 echo
 echo "Claude Code Arcade"
 echo
@@ -43,16 +126,12 @@ ln -sfn "$SRC/statusline.sh" "$ARCADE/statusline.sh"
 chmod +x "$SRC/statusline.sh" "$SRC/arcade" "$SRC/arcaded.js" "$SRC/arcadectl.js" 2>/dev/null || true
 say "runtime" "~/.arcade"
 
-mkdir -p "$HOME/.local/bin"
-ln -sfn "$SRC/arcade" "$HOME/.local/bin/arcade"
+mkdir -p "$(dirname "$CLI")"
+ln -sfn "$SRC/arcade" "$CLI"
 say "cli" "~/.local/bin/arcade"
 
 # The sprite font upgrades mspacman from Unicode glyphs to pixel sprites, and
 # frogger needs it outright — its whole cast lives only in that font.
-case "$(uname -s)" in
-  Darwin) FONTDIR="$HOME/Library/Fonts" ;;
-  *) FONTDIR="$HOME/.local/share/fonts" ;;
-esac
 mkdir -p "$FONTDIR"
 cp "$SRC/ArcadeSprites.ttf" "$FONTDIR/ArcadeSprites.ttf"
 say "font" "~${FONTDIR#$HOME}/ArcadeSprites.ttf"
@@ -61,8 +140,8 @@ say "font" "~${FONTDIR#$HOME}/ArcadeSprites.ttf"
 
 # Rewrite settings.json with node rather than sed: it is the user's real config
 # and every other key has to survive untouched.
-mkdir -p "$HOME/.claude"
-"$NODE" - "$HOME/.claude/settings.json" "$ARCADE/statusline.backup.json" <<'JS'
+mkdir -p "$(dirname "$SETTINGS")"
+"$NODE" - "$SETTINGS" "$ARCADE/statusline.backup.json" <<'JS'
 const fs = require('fs');
 const [file, backup] = process.argv.slice(2);
 let s = {};
