@@ -1372,18 +1372,19 @@ function woprFxRow(f, W) {
   return { body, vis };
 }
 
-// Your turn: the cabinet stops where it stood. The MESSAGE blinks twice as the
-// reply ends and then holds steady — the same cadence as INSERT COIN, and for
-// the same reason, which is that a statusline still flashing while you type is
-// a distraction. The caret keeps its own blink through all of it, which is the
-// one thing on screen that should still be moving while the machine waits.
+// Your turn: the cabinet stops where it stood, and so does the caret. The whole
+// card — message and caret together — blinks twice as the reply ends and then
+// holds steady, the same cadence as INSERT COIN and for the same reason: a
+// statusline still moving while you type is a distraction, and the caret is no
+// more exempt from that than the words are. It blinks while WOPR is actually
+// typing, which is where a cursor means something; here it just sits lit.
 function renderWoprIdleFor(cols) {
   const W = Math.max(20, cols - MARGIN);
   const msg = W >= 24 ? 'SHALL WE PLAY A GAME?' : 'SHALL WE PLAY?';
   const age = ticks - lastEventTick - IDLE_ATTRACT;
   const on = age >= 20 || Math.floor(age / 5) % 2 === 1;
   const pad = Math.max(0, Math.floor((W - msg.length - 1) / 2));
-  const line = WOPR_ON + ' '.repeat(pad) + (on ? WOPR_ON : WOPR_OFF) + msg + WOPR_ON + woprCaret();
+  const line = WOPR_ON + ' '.repeat(pad) + (on ? WOPR_ON : WOPR_OFF) + msg + WOPR_ON + (on ? WOPR_CURSOR : ' ');
   writeFrame(cols, line + WOPR_ON + ' '.repeat(Math.max(0, W - pad - msg.length - 1)) + '\x1b[0m');
 }
 
