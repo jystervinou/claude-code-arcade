@@ -8,6 +8,8 @@ is doing. It works, the arcade plays.
 Ms. Pac-Man. Frogger. Or an aquarium and a safari, if you want something calmer.
 They play themselves — grab the joystick if you want, but you don't have to.
 
+![Ms. Pac-Man running in the Claude Code status line](docs/ms-pacman.png)
+
 ## Setup
 
 Paste this into Claude Code (the `!` runs it as a shell command) or into any
