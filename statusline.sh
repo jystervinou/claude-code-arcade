@@ -36,19 +36,28 @@ w="${COLUMNS:-}"
 [ -n "$w" ] || w="$(tput cols 2>/dev/null)"
 [ -n "$w" ] || w=80
 
-# Every open session drops a marker named by its transcript UUID; the daemon
-# tails all fresh transcripts, so fish from every session share one tank.
+# session_id is Claude Code's own identifier for this window: stable for the
+# life of the session, unique across concurrent ones, and the field the docs
+# point at for exactly this — per-session state keyed by something that is not
+# a process id. It names this window's marker and this window's frame.
+re='"session_id"[[:space:]]*:[[:space:]]*"([^"]+)"'
+[[ $j =~ $re ]] && sid="${BASH_REMATCH[1]}"
 re='"transcript_path"[[:space:]]*:[[:space:]]*"([^"]+)"'
-if [[ $j =~ $re ]]; then
-  tp="${BASH_REMATCH[1]}"
-  printf '%s\n%s\n' "$tp" "$w" > "$ARCADE/tanks/${tp##*/}.path"
+[[ $j =~ $re ]] && tp="${BASH_REMATCH[1]}"
+if [ -n "${sid:-}" ] && [ -n "${tp:-}" ]; then
+  printf '%s\n%s\n' "$tp" "$w" > "$ARCADE/tanks/$sid.path"
+  # Upgrading from the build that named markers after the transcript file: the
+  # two names differ only by '.jsonl', so leaving the old one behind makes this
+  # session look like two, and every id prefix ambiguous.
+  legacy="$ARCADE/tanks/${tp##*/}.path"
+  [ "$legacy" != "$ARCADE/tanks/$sid.path" ] && rm -f "$legacy"
 fi
 
 if ! kill -0 "$(cat "$ARCADE/pid" 2>/dev/null)" 2>/dev/null; then
   [ -n "$NODE" ] && nohup "$NODE" "$ARCADE/arcaded.js" >/dev/null 2>&1 &
 fi
 
-cat "$ARCADE/frame.$w" 2>/dev/null && exit 0
-# Right after a resize this width's frame may not exist yet; show any frame.
-for f in "$ARCADE"/frame.*; do [ -f "$f" ] && cat "$f" && exit 0; done
-printf '🫧 filling the tank…'
+# This session's own frame, and only ever this one — another window's frame is
+# another window's game. Nothing yet means the daemon has not ticked.
+[ -n "${sid:-}" ] && cat "$ARCADE/frame.$sid" 2>/dev/null && exit 0
+printf ' '

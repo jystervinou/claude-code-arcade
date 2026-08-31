@@ -53,7 +53,8 @@ if [ "$PURGE" = 1 ]; then
   rm -rf "$ARCADE"
   echo "  purged ~/.arcade (scores included)"
 else
-  rm -f "$ARCADE"/frame.* "$ARCADE/pid" "$ARCADE/input"
+  rm -f "$ARCADE"/frame.* "$ARCADE"/input.* "$ARCADE/pid" "$ARCADE/input" "$ARCADE/live.json"
+  rm -rf "$ARCADE/play" "$ARCADE/sessions"
   rm -f "$ARCADE/arcaded.js" "$ARCADE/arcadectl.js" "$ARCADE/statusline.sh"
   rm -rf "$ARCADE/tanks"
   echo "  kept ~/.arcade/state.json (your scores) — rerun with --purge to drop it"

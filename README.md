@@ -8,6 +8,9 @@ is doing. It works, the arcade plays.
 Ms. Pac-Man. Frogger. Or an aquarium and a safari, if you want something calmer.
 They play themselves — grab the joystick if you want, but you don't have to.
 
+Every window is its own cabinet: its own game, its own creatures, its own score,
+played by whatever Claude is doing in *that* session.
+
 Or WOPR, from WarGames, which types its way through the film while Claude works:
 the logon, the list of games, and a game of Global Thermonuclear War.
 
@@ -36,7 +39,19 @@ you're already using.
 
 ## Playing
 
+A new window doesn't start a game. It waits, the way a cabinet waits, and tells
+you how to put a coin in:
+
 ```
+INSERT COIN  ·  type  !arcade start a1b2c3  at this prompt
+```
+
+That id belongs to the window showing it, so there's never a question of which
+one you mean, and the `!` runs it without leaving Claude Code.
+
+```
+arcade start            put a coin in (the id is in the status line)
+arcade stop             game over
 arcade theme mspacman   Ms. Pac-Man
 arcade theme frogger    Frogger
 arcade theme wopr       W.O.P.R., typing its way through WarGames
@@ -45,8 +60,12 @@ arcade theme safari     🐒🦩🐍🦌🦂🦡🦅 / 🐘🦒🦏🦛🐆🦓�
 arcade demo on          keep playing while Claude is idle
 arcade play             joystick (optional)
 arcade off              switch the arcade off; arcade on switches it back
-arcade status           what's running
+arcade status           every window: what it plays, what it has scored
 ```
+
+Every command takes an optional session id: with one it applies to that window,
+with none to all of them. `arcade theme wopr` switches every window, `arcade
+theme wopr a1b2c3` switches one. Any unique prefix of an id works.
 
 Those are ordinary shell commands. Run them in any terminal, or straight from
 the Claude Code prompt with a `!` in front — `!arcade theme frogger` runs it in
@@ -57,7 +76,8 @@ of its own.
 Switch any time — it takes effect live.
 
 She plays herself: laps the maze, eats the dots, runs from ghosts, doubles back
-for fruit. Real arcade scoring, kept between sessions, one score per game.
+for fruit. Real arcade scoring — each window plays its own credit from zero, and
+the best any credit has ever reached is kept as the high score (`arcade status`).
 
 ## Switching it off
 
@@ -116,10 +136,12 @@ neither of which needs a font at all.
 
 ## How it works
 
-A small daemon watches your sessions and writes one frame every 200ms;
-`statusline.sh` just prints the current one. All your open Claude Code windows
-share the same world, and the daemon shuts itself down two minutes after the
-last one closes — or the moment you run `arcade off`.
+A small daemon runs one world per open session and writes each window its own
+frame every 200ms; `statusline.sh` just prints the one belonging to its session.
+Windows are keyed by the `session_id` Claude Code passes to the status line, so
+two windows of the same size are still two different games. The daemon shuts
+itself down two minutes after the last window closes — or the moment you run
+`arcade off`.
 
 ## Settings
 

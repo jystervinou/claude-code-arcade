@@ -143,7 +143,7 @@ echo
 echo "Claude Code Arcade"
 echo
 
-mkdir -p "$ARCADE/tanks"
+mkdir -p "$ARCADE/tanks" "$ARCADE/play" "$ARCADE/sessions"
 ln -sfn "$SRC/arcaded.js" "$ARCADE/arcaded.js"
 ln -sfn "$SRC/arcadectl.js" "$ARCADE/arcadectl.js"
 ln -sfn "$SRC/statusline.sh" "$ARCADE/statusline.sh"
@@ -211,13 +211,16 @@ esac
 echo "  Now QUIT your terminal app completely (Cmd-Q) and reopen it."
 echo "  Terminals cache glyph lookups per process, so a new tab will not do."
 echo
-echo "  Then pick a game:"
+echo "  Then, in any Claude Code window, put a coin in:"
+echo "    arcade start              the window tells you its own id while it waits"
+echo
+echo "  And pick a game:"
 echo "    arcade theme mspacman     Ms. Pac-Man (the default)"
 echo "    arcade theme frogger      Frogger"
 echo "    arcade theme wopr         W.O.P.R. — shall we play a game?"
 echo "    arcade theme aquarium     fish"
 echo "    arcade theme safari       savanna"
 echo "    arcade demo on            keep playing while Claude is idle"
-echo "    arcade off                switch it off (stops the daemon); arcade on brings it back"
+echo "    arcade stop               game over; arcade off switches the whole arcade off"
 echo "    arcade status             what is running"
 echo

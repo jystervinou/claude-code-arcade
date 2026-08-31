@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# arcade — control the Claude Code statusline vivarium.
+# arcade — control the Claude Code statusline arcade.
+#
+# Every window is its own cabinet: its own game, its own creatures, its own
+# score, fed by what that session's Claude does. So most commands take an
+# optional session — with one they apply to that window, with none to all.
 ARCADE="$HOME/.arcade"
 
 # ArcadeSprites.ttf is an upgrade, never a prerequisite: mspacman draws with
@@ -13,13 +17,10 @@ have_font() { [ -f "$FONT_MAC" ] || [ -f "$FONT_LINUX" ]; }
 # install that never touched the switch — and every upgrade from before there
 # was one — plays.
 arcade_off() { [ -f "$ARCADE/enabled" ] && grep -qiE '^(off|0|false|no)' "$ARCADE/enabled"; }
-# `&&` alone would make an on arcade the last (failing) command of the branch,
-# so the whole script would exit 1 on a plain `arcade theme wopr`.
 off_hint() { arcade_off && echo "  note: the arcade is off — run: arcade on"; return 0; }
 
 # Stop the daemon for real rather than waiting for it to notice the switch:
-# "off" should mean the process is gone by the time the command returns. It
-# holds no state beyond ~/.arcade/state.json, which it writes as it goes.
+# "off" should mean the process is gone by the time the command returns.
 stop_daemon() {
   p="$(cat "$ARCADE/pid" 2>/dev/null)"
   if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
@@ -28,37 +29,97 @@ stop_daemon() {
     while kill -0 "$p" 2>/dev/null && [ "$n" -lt 20 ]; do sleep 0.1; n=$((n + 1)); done
     kill -0 "$p" 2>/dev/null && kill -9 "$p" 2>/dev/null
   fi
-  # The daemon dies on the signal without running its own cleanup, so the pid
-  # file and the last frames are ours to sweep up.
   rm -f "$ARCADE/pid" "$ARCADE"/frame.*
 }
 
+# ------------------------------------------------------------------ sessions
+# One marker per open window, named for its transcript. That name is the
+# session key; the daemon writes that window's frame to frame.<key>.
+sessions() { ls "$ARCADE/tanks" 2>/dev/null | sed 's/\.path$//'; }
+
+short() { printf '%s' "${1%%-*}"; } # first field of the uuid: enough to type
+
+# An id from `arcade status`: the short form, the full name, or any unique
+# prefix of either.
+resolve() {
+  want="$1"
+  hits=""
+  for k in $(sessions); do
+    case "$k" in "$want"*) hits="$hits $k" ;; esac
+  done
+  set -- $hits
+  case $# in
+    1) printf '%s\n' "$1"; return 0 ;;
+    0) echo "no session matches '$want' — run: arcade status" >&2; return 1 ;;
+    *) echo "'$want' matches $# sessions — type more of it" >&2; return 1 ;;
+  esac
+}
+
+session_dir() { printf '%s\n' "$ARCADE/sessions/$1"; }
+
 case "$1" in
+  start)
+    mkdir -p "$ARCADE/play"
+    id="${2:-}"
+    if [ -n "$id" ]; then
+      id="$(resolve "$id")" || exit 1
+    else
+      # No id given: fine when there is only one window. With several, the one
+      # you want is printing its own id in its own status line.
+      ks="$(sessions)"
+      if [ "$(printf '%s\n' "$ks" | grep -c .)" = 1 ]; then
+        id="$ks"
+      else
+        echo "which window? each one shows its own id in its status line:"
+        echo
+        echo "    INSERT COIN  ·  arcade start <id>"
+        echo
+        bash "$0" status
+        exit 1
+      fi
+    fi
+    touch "$ARCADE/play/$id"
+    echo "game on — $(short "$id")"
+    off_hint ;;
+  stop)
+    id="${2:-}"
+    if [ -n "$id" ]; then
+      id="$(resolve "$id")" || exit 1
+      rm -f "$ARCADE/play/$id"
+      echo "game over — $(short "$id")"
+    else
+      for k in $(sessions); do rm -f "$ARCADE/play/$k"; done
+      echo "all games stopped"
+    fi ;;
   theme)
     case "$2" in
-      aquarium|sea) printf 'sea\n' > "$ARCADE/theme"; echo "theme → aquarium 🐟" ;;
-      safari) printf 'safari\n' > "$ARCADE/theme"; echo "theme → safari 🦁" ;;
-      mspacman|pacman|arcade)
-        printf 'mspacman\n' > "$ARCADE/theme"
-        if have_font; then echo "theme → ms. pac-man (pixel sprites)"
-        else
-          echo "theme → ms. pac-man ᗤ·●ᗣ"
-          echo "  tip: arcade font install  — swaps these in for real pixel sprites"
-        fi ;;
-      frogger)
-        printf 'frogger\n' > "$ARCADE/theme"; echo "theme → frogger"
-        have_font || echo "  needs the sprite font — run: arcade font install"
-        ;;
-      # No font, no sprites, no game — a terminal. Plain ASCII, so this one also
-      # works on Windows Terminal.
-      wopr|wargames)
-        printf 'wopr\n' > "$ARCADE/theme"; echo "theme → w.o.p.r.  shall we play a game?" ;;
-      *) echo "usage: arcade theme aquarium|safari|mspacman|frogger|wopr"; exit 1 ;;
+      aquarium|sea) t=sea; label="aquarium 🐟" ;;
+      safari) t=safari; label="safari 🦁" ;;
+      mspacman|pacman|arcade) t=mspacman; label="ms. pac-man" ;;
+      frogger) t=frogger; label="frogger" ;;
+      wopr|wargames) t=wopr; label="w.o.p.r.  shall we play a game?" ;;
+      *) echo "usage: arcade theme aquarium|safari|mspacman|frogger|wopr [session]"; exit 1 ;;
+    esac
+    if [ -n "${3:-}" ]; then
+      id="$(resolve "$3")" || exit 1
+      mkdir -p "$(session_dir "$id")"
+      printf '%s\n' "$t" > "$(session_dir "$id")/theme"
+      echo "theme → $label  ($(short "$id") only)"
+    else
+      # No session named means all of them, so the per-window overrides have to
+      # go: otherwise "applies to all" would quietly skip the windows with one.
+      printf '%s\n' "$t" > "$ARCADE/theme"
+      for k in $(sessions); do rm -f "$(session_dir "$k")/theme"; done
+      echo "theme → $label"
+    fi
+    case "$t" in
+      mspacman) have_font || echo "  tip: arcade font install — real pixel sprites instead of Unicode" ;;
+      frogger) have_font || echo "  needs the sprite font — run: arcade font install" ;;
     esac
     off_hint ;;
   font)
-    # ArcadeSprites.ttf is a plain user font: one small file in the user font
-    # dir, nothing system-level, removal reverts everything.
+    # A plain user font: one small file in the user font dir, nothing
+    # system-level, removal reverts everything.
     REPO="$(dirname "$(readlink "$ARCADE/arcaded.js" || echo "$ARCADE/arcaded.js")")"
     case "$(uname -s)" in Darwin) DEST="$FONT_MAC" ;; *) DEST="$FONT_LINUX" ;; esac
     case "$2" in
@@ -72,42 +133,55 @@ case "$1" in
       *) echo "usage: arcade font install|remove"; exit 1 ;;
     esac ;;
   play)
-    if [ "$2" = "global" ]; then
-      # F1/F2/F3 steer from ANY window (Claude Code's included) via a
-      # listen-only key monitor — see arcadekeys.swift for the fine print.
+    # The joystick writes to ~/.arcade/input, which every running game reads, or
+    # to input.<session> for one window, which takes precedence there.
+    if [ "$2" = "global" ] || [ "$3" = "global" ]; then
       REPO="$(dirname "$(readlink "$ARCADE/arcaded.js" || echo "$ARCADE/arcaded.js")")"
       exec swift "$REPO/arcadekeys.swift"
+    fi
+    target="$ARCADE/input"
+    if [ -n "${2:-}" ]; then
+      id="$(resolve "$2")" || exit 1
+      target="$ARCADE/input.$id"
+      echo "joystick → $(short "$id") only"
     fi
     NODE="$(command -v node 2>/dev/null)"
     [ -x "$NODE" ] || for n in "$HOME/.volta/bin/node" /opt/homebrew/bin/node /usr/local/bin/node; do
       [ -x "$n" ] && NODE="$n" && break
     done
-    exec "$NODE" "$ARCADE/arcadectl.js" ;;
+    ARCADE_INPUT="$target" exec "$NODE" "$ARCADE/arcadectl.js" ;;
   demo)
-    # The attract reel: when Claude goes quiet, play on instead of INSERT COIN.
     case "$2" in
-      on) printf 'on\n' > "$ARCADE/demo"; echo "demo → on (the game plays itself while Claude is idle)" ;;
-      off) printf 'off\n' > "$ARCADE/demo"; echo "demo → off (idle shows INSERT COIN)" ;;
-      ''|status) echo "demo:   $(cat "$ARCADE/demo" 2>/dev/null || echo off)" ;;
-      *) echo "usage: arcade demo on|off"; exit 1 ;;
+      on|off) d="$2" ;;
+      ''|status) echo "demo:   $(cat "$ARCADE/demo" 2>/dev/null || echo off)"; exit 0 ;;
+      *) echo "usage: arcade demo on|off [session]"; exit 1 ;;
     esac
+    if [ -n "${3:-}" ]; then
+      id="$(resolve "$3")" || exit 1
+      mkdir -p "$(session_dir "$id")"
+      printf '%s\n' "$d" > "$(session_dir "$id")/demo"
+      echo "demo → $d  ($(short "$id") only)"
+    else
+      printf '%s\n' "$d" > "$ARCADE/demo"
+      for k in $(sessions); do rm -f "$(session_dir "$k")/demo"; done
+      echo "demo → $d"
+    fi
     off_hint ;;
-  on|start|enable)
+  on|enable)
     mkdir -p "$ARCADE"
     printf 'on\n' > "$ARCADE/enabled"
     echo "arcade → on (the statusline picks it back up within a second)" ;;
-  off|stop|disable)
+  off|disable)
     mkdir -p "$ARCADE"
     # Flag first, then kill: a statusline refresh racing this would otherwise
-    # start a fresh daemon a moment after we stopped the old one. Written the
-    # other way round, the new daemon reads "off" at startup and stands down.
+    # start a fresh daemon a moment after we stopped the old one.
     printf 'off\n' > "$ARCADE/enabled"
     stop_daemon
     echo "arcade → off (daemon stopped, status line blank)"
-    echo "  arcade on   brings it back — your theme, scores and settings are kept" ;;
+    echo "  arcade on   brings it back — themes, scores and settings are kept" ;;
   status)
     if arcade_off; then echo "arcade: off (arcade on to start it)"; else echo "arcade: on"; fi
-    echo "theme:  $(cat "$ARCADE/theme" 2>/dev/null || echo sea)"
+    echo "theme:  $(cat "$ARCADE/theme" 2>/dev/null || echo sea)  (default)"
     if have_font; then echo "font:   installed (pixel sprites)"
     else echo "font:   not installed — Unicode glyphs (arcade font install)"; fi
     echo "demo:   $(cat "$ARCADE/demo" 2>/dev/null || echo off)"
@@ -115,25 +189,37 @@ case "$1" in
     if kill -0 "$p" 2>/dev/null; then echo "daemon: running (pid $p)"
     elif arcade_off; then echo "daemon: stopped (the arcade is off)"
     else echo "daemon: stopped (statusline revives it)"; fi
-    echo "tanks:  $(ls "$ARCADE/tanks" 2>/dev/null | wc -l | tr -d ' ') session(s)"
     if [ -f "$ARCADE/state.json" ]; then
-      s="$(cat "$ARCADE/state.json")"
-      # -n/p so a miss prints nothing rather than echoing the whole JSON back.
-      # Pre-split saves have a single "score" — report it as Ms. Pac-Man's.
-      pac="$(printf '%s' "$s" | sed -nE 's/.*"pac":([0-9]+).*/\1/p')"
-      [ -n "$pac" ] || pac="$(printf '%s' "$s" | sed -nE 's/.*"score":([0-9]+).*/\1/p')"
-      frog="$(printf '%s' "$s" | sed -nE 's/.*"frog":([0-9]+).*/\1/p')"
-      echo "pac:    ${pac:-0}"
-      echo "frog:   ${frog:-0}"
-    fi ;;
+      hi="$(cat "$ARCADE/state.json")"
+      pac="$(printf '%s' "$hi" | sed -nE 's/.*"pac":([0-9]+).*/\1/p')"
+      frog="$(printf '%s' "$hi" | sed -nE 's/.*"frog":([0-9]+).*/\1/p')"
+      echo "best:   pac ${pac:-0} · frog ${frog:-0}  (all time)"
+    fi
+    echo
+    n=0
+    for k in $(sessions); do
+      n=$((n + 1))
+      [ "$n" = 1 ] && printf '   %-10s %-5s %-12s %-9s %s\n' ID COLS STATE THEME 'SCORE pac/frog'
+      cols="$(sed -n 2p "$ARCADE/tanks/$k.path" 2>/dev/null)"
+      th="$(cat "$(session_dir "$k")/theme" 2>/dev/null || cat "$ARCADE/theme" 2>/dev/null || echo sea)"
+      if [ -f "$ARCADE/play/$k" ]; then state=playing; else state="insert coin"; fi
+      sc="$(sed -nE "s/.*\"key\":\"$k\"[^}]*\"pac\":([0-9]+),\"frog\":([0-9]+).*/\1 \/ \2/p" "$ARCADE/live.json" 2>/dev/null)"
+      printf '   %-10s %-5s %-12s %-9s %s\n' "$(short "$k")" "${cols:-?}" "$state" "$th" "${sc:--}"
+    done
+    if [ "$n" = 0 ]; then echo "  no Claude Code sessions open"
+    else echo; echo "  each window prints its own id while it waits for a coin"; fi ;;
   *)
-    echo "arcade — Claude Code Arcade: little games in the status line"
-    echo "  arcade theme aquarium|safari|mspacman|frogger|wopr  switch theme (live)"
-    echo "  arcade font install|remove                          pixel sprites (upgrades mspacman, needed by frogger)"
-    echo "  arcade play                                         joystick (this pane only)"
-    echo "  arcade play global                                  F1/F2/F3 steer from any window"
-    echo "  arcade demo on|off                                  attract reel: play on while Claude is idle"
-    echo "  arcade off                                          switch the arcade off (stops the daemon)"
-    echo "  arcade on                                           switch it back on"
-    echo "  arcade status                                       daemon + theme + sessions + scores" ;;
+    echo "arcade — Claude Code Arcade: one game per window, in the status line"
+    echo "  arcade start [session]        put a coin in — a new window plays nothing until you do"
+    echo "  arcade stop [session]         game over"
+    echo "  arcade theme NAME [session]   aquarium|safari|mspacman|frogger|wopr"
+    echo "  arcade demo on|off [session]  attract reel: play on while Claude is idle"
+    echo "  arcade play [session]         joystick (this pane only)"
+    echo "  arcade play global            F1/F2/F3 steer from any window"
+    echo "  arcade font install|remove    pixel sprites"
+    echo "  arcade off | arcade on        stop / start the whole arcade"
+    echo "  arcade status                 every window: what it plays, what it scored"
+    echo
+    echo "  With no [session] a command applies to every window, with one to that"
+    echo "  window only. Ids come from 'arcade status'; any unique prefix works." ;;
 esac

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // arcadectl.js — joystick for the statusline Ms. Pac-Man.
-// Run in any spare terminal pane: `node ~/.arcade/arcadectl.js`. Keys register while
-// this pane has focus; the daemon polls ~/.arcade/input every tick. Without a
+// Run in any spare terminal pane: `arcade play`, or `arcade play <session>` to
+// steer one window. Keys register while this pane has focus; each running game
+// polls its input file every tick. Without a
 // joystick running she plays herself (and resumes auto-pilot ~30s after the
 // last input).
 'use strict';
@@ -10,7 +11,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const INPUT = path.join(os.homedir(), '.arcade', 'input');
+// `arcade play` sets ARCADE_INPUT when the joystick is aimed at one window;
+// without it we write the shared input file, which every running game reads.
+const INPUT = process.env.ARCADE_INPUT || path.join(os.homedir(), '.arcade', 'input');
 const SEQ = [
   ['\x1b[D', 'L', '← left '],
   ['\x1bOP', 'L', 'F1 left '],

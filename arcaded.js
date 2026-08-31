@@ -37,6 +37,11 @@ const STATE = path.join(ARCADE, 'state.json');
 const INPUT = path.join(ARCADE, 'input');
 const DEMO = path.join(ARCADE, 'demo');
 const ENABLED = path.join(ARCADE, 'enabled');
+// One file per session that has a game running: opening a window no longer
+// starts one. The cabinet is there, lit, waiting for a coin.
+const PLAY = path.join(ARCADE, 'play');
+// What the CLI reads to list what is running: one line of truth per window.
+const LIVE = path.join(ARCADE, 'live.json');
 
 const TICK_MS = 200;
 // Claude Code's statusline area is a few columns narrower than the COLUMNS it
@@ -494,8 +499,15 @@ function attractNow() {
   const age = ticks - lastEventTick;
   return (replyDone && age > IDLE_ATTRACT) || age > STALL_ATTRACT;
 }
-const tanks = new Map(); // transcript path -> {offset, partial, cols}
-let maxCols = 80;
+// One world per open session (per window), keyed by its transcript file name.
+// Two windows are two cabinets: their own creatures, their own maze, their own
+// score, fed only by what THAT session's Claude does. The game used to be one
+// shared world rendered per terminal width, with the rules applied only in the
+// widest view — so a second window of a different size drew the same sprites
+// with none of the rules.
+const worlds = new Map(); // session key -> world
+let maxCols = 80; // the world currently loaded (see loadWorld)
+let currentKey = ''; // which world's frame writeFrame is writing
 let ticks = 0;
 
 // Ms. Pac-Man world state.
@@ -512,7 +524,7 @@ let fruitIdx = 0;
 let fruitTimer = parseInt(process.env.ARCADE_FRUIT_FIRST, 10) || FRUIT_FIRST_TICKS;
 // Each cabinet keeps its own credit: a Frogger run must not inherit Ms.
 // Pac-Man's total, and switching themes mid-session must not clobber either.
-const scores = { pac: 0, frog: 0 };
+let scores = { pac: 0, frog: 0 };
 let combo = 200;
 let eatenFruits = [];
 let lastPacInt = 0;
@@ -522,7 +534,10 @@ let lastInputTick = -9999;
 // Eaten-dot trail per rendered width: the swept [lo, hi] column range since
 // the last lap wrap. Dots vanish only where she has actually been — deriving
 // the field from her direction made every U-turn erase half the row at once.
-const dotTrail = new Map(); // cols -> {lo, hi, last, W}
+// The maze she has cleared this lap, in WORLD columns (see interact()). It
+// used to be per-view — a Map keyed by terminal width — which is how the game
+// came to be DEFINED by whichever window happened to be widest.
+let swept = null; // {lo, hi, prevLo, prevHi, last, ww}
 
 // Frogger world state.
 let frogD = 0; // cols from the LEFT bank
@@ -533,27 +548,37 @@ let homes = 0;
 // beat, how many characters of it — and never per-width, because render() runs
 // once for every distinct terminal width open and all of them have to be showing
 // the same moment of the same conversation. Each width wraps it for itself.
-let woprBeat = 0;
+// ARCADE_WOPR_BEAT starts the film at a given line instead of the logon screen
+// — for filming and for looking at one beat without sitting through the reel.
+let woprBeat = parseInt(process.env.ARCADE_WOPR_BEAT, 10) || 0;
 let woprChars = 0; // fractional — the reveal accumulates characters per tick
 let woprHold = 0;
 let woprLine = ''; // what is already committed on the line being printed
 let woprFx = null; // per-tick state for the two animated beats
 let woprBlinkFrom = 0; // tick the current line began, so the caret blinks from lit
 
+// Every window plays its own credit, starting at zero — so what persists is
+// not "the" score but the best any credit has ever reached on this machine.
+// Older saves kept a single running total; it becomes the high score, which is
+// what it effectively was.
+const hiScores = { pac: 0, frog: 0 };
 try {
   const s = JSON.parse(fs.readFileSync(STATE, 'utf8'));
-  // Pre-split saves had one `score`; it was mostly Ms. Pac-Man's, so it lands there.
-  scores.pac = (s.scores ? s.scores.pac : s.score) | 0;
-  scores.frog = (s.scores ? s.scores.frog : 0) | 0;
-  fruitIdx = s.fruitIdx | 0;
-  homes = s.homes | 0;
-  if (Array.isArray(s.eatenFruits)) eatenFruits = s.eatenFruits.slice(-3);
+  hiScores.pac = (s.hi ? s.hi.pac : s.scores ? s.scores.pac : s.score) | 0;
+  hiScores.frog = (s.hi ? s.hi.frog : s.scores ? s.scores.frog : 0) | 0;
 } catch {}
 
 function saveState() {
-  if (demoing) return; // a demo run is not your game — never let it reach disk
   try {
-    fs.writeFileSync(STATE, JSON.stringify({ scores, fruitIdx, homes, eatenFruits: eatenFruits.slice(-3) }));
+    fs.writeFileSync(STATE, JSON.stringify({ hi: hiScores }));
+  } catch {}
+  // Called at the end of the tick, once every world has been stored, so these
+  // are the scores as they stand this second.
+  try {
+    const live = [...worlds.values()].map((w) => ({
+      key: w.key, cols: w.cols, playing: !!w.playing, pac: w.scores.pac, frog: w.scores.frog,
+    }));
+    fs.writeFileSync(LIVE, JSON.stringify(live));
   } catch {}
 }
 
@@ -568,6 +593,10 @@ const DEMO_TOOLS = ['Read', 'Bash', 'Grep', 'Edit', 'Glob', 'Write', 'Read', 'Ba
 let demoSeq = 0;
 
 function demoOn() {
+  try {
+    const own = fs.readFileSync(sessionFile('demo'), 'utf8').trim();
+    if (own) return /^on|^1|^true|^yes/.test(own);
+  } catch {}
   try {
     return /^on|^1|^true|^yes/.test(fs.readFileSync(DEMO, 'utf8').trim());
   } catch {
@@ -615,7 +644,18 @@ function demoBeat() {
   if (Math.random() < 0.02) dropGum(); // self-throttled to one per ~10s
 }
 
+// Settings resolve per session first, then globally: `arcade theme frogger`
+// with no session id sets the default every window follows, and with one it
+// sets that window only.
+function sessionFile(name) {
+  return path.join(ARCADE, 'sessions', currentKey, name);
+}
+
 function theme() {
+  try {
+    const own = fs.readFileSync(sessionFile('theme'), 'utf8').trim();
+    if (own) return own;
+  } catch {}
   try {
     return fs.readFileSync(THEME, 'utf8').trim() || 'sea';
   } catch {
@@ -653,8 +693,14 @@ function spriteFont() {
   return fontSeen;
 }
 
+// One per 7 columns was a wall: on a wide terminal a busy session pins the
+// population at the cap, cullNearestExit() then deletes whoever got furthest
+// on every spawn, and creatures pack tightly enough that putWideNear runs out
+// of free cells and drops one for a frame — which reads as blinking. The demo
+// reel worked this out first and caps itself at 6 for exactly this reason:
+// a handful on the line reads as something to dodge, a wall reads as noise.
 function fishCap() {
-  return Math.max(10, Math.floor(maxCols / 7));
+  return Math.max(6, Math.floor(maxCols / 12));
 }
 
 // The HUD steals these from the playfield. Both the simulation and every
@@ -698,18 +744,28 @@ function dropGum() {
   gums.push({ g, born: ticks });
 }
 
+// ~/.arcade/input steers every running game; ~/.arcade/input.<session> steers
+// one, and takes precedence for that window. Each world remembers the mtime it
+// last acted on, so one keypress reaches all of them exactly once.
 function pollInput() {
+  const own = path.join(ARCADE, 'input.' + currentKey);
+  let src = own;
   let st;
   try {
-    st = fs.statSync(INPUT);
+    st = fs.statSync(src);
   } catch {
-    return;
+    src = INPUT;
+    try {
+      st = fs.statSync(src);
+    } catch {
+      return;
+    }
   }
   if (st.mtimeMs === inputMtime) return;
   inputMtime = st.mtimeMs;
   let c = '';
   try {
-    c = fs.readFileSync(INPUT, 'utf8').trim();
+    c = fs.readFileSync(src, 'utf8').trim();
   } catch {
     return;
   }
@@ -839,6 +895,64 @@ function harvest(line) {
   }
 }
 
+// A world's state lives in the module-level variables below, and is swapped in
+// and out around each session's turn. Threading a state object through every
+// renderer and helper would touch a few hundred call sites; this keeps the
+// simulation code exactly as it reads today, and it is the pattern the demo
+// reel already uses to put a run aside and take it back.
+function newWorld(tp, cols) {
+  return {
+    tp, cols, offset: 0, partial: '',
+    fish: [], gums: [], lastGumTick: -999,
+    fruit: null, fruitIdx: 0, fruitTimer: parseInt(process.env.ARCADE_FRUIT_FIRST, 10) || FRUIT_FIRST_TICKS,
+    pacD: 0, pacDir: 1, boost: 0, fright: 0, dying: 0, invuln: 0, combo: 200,
+    eatenFruits: [], lastPacInt: 0, lastUturnTick: -9999, swept: null,
+    frogD: 0, squash: 0, homes: 0,
+    scores: { pac: 0, frog: 0 },              // every window starts on a fresh credit
+    lastEventTick: -1e9, replyDone: true, inputMtime: 0, lastInputTick: -9999,
+    demoing: false, demoSave: null, demoSeq: 0,
+    woprBeat: parseInt(process.env.ARCADE_WOPR_BEAT, 10) || 0,
+    woprChars: 0, woprHold: 0, woprLine: '', woprFx: null, woprBlinkFrom: 0,
+  };
+}
+
+const WORLD_FIELDS = [
+  'fish', 'gums', 'lastGumTick', 'fruit', 'fruitIdx', 'fruitTimer', 'pacD', 'pacDir',
+  'boost', 'fright', 'dying', 'invuln', 'combo', 'eatenFruits', 'lastPacInt',
+  'lastUturnTick', 'swept', 'frogD', 'squash', 'homes', 'scores', 'lastEventTick',
+  'replyDone', 'inputMtime', 'lastInputTick', 'demoing', 'demoSave', 'demoSeq',
+  'woprBeat', 'woprChars', 'woprHold', 'woprLine', 'woprFx', 'woprBlinkFrom',
+];
+
+function loadWorld(w) {
+  currentKey = w.key;
+  maxCols = w.cols; // mazeWidth(), fishCap() and the renderers all read this
+  ({ fish, gums, lastGumTick, fruit, fruitIdx, fruitTimer, pacD, pacDir, boost, fright,
+     dying, invuln, combo, eatenFruits, lastPacInt, lastUturnTick, swept, frogD, squash,
+     homes, scores, lastEventTick, replyDone, inputMtime, lastInputTick, demoing,
+     demoSave, demoSeq, woprBeat, woprChars, woprHold, woprLine, woprFx,
+     woprBlinkFrom } = w);
+}
+
+function storeWorld(w) {
+  w.fish = fish; w.gums = gums; w.lastGumTick = lastGumTick; w.fruit = fruit;
+  w.fruitIdx = fruitIdx; w.fruitTimer = fruitTimer; w.pacD = pacD; w.pacDir = pacDir;
+  w.boost = boost; w.fright = fright; w.dying = dying; w.invuln = invuln;
+  w.combo = combo; w.eatenFruits = eatenFruits; w.lastPacInt = lastPacInt;
+  w.lastUturnTick = lastUturnTick; w.swept = swept; w.frogD = frogD; w.squash = squash;
+  w.homes = homes; w.scores = scores; w.lastEventTick = lastEventTick;
+  w.replyDone = replyDone; w.inputMtime = inputMtime; w.lastInputTick = lastInputTick;
+  w.demoing = demoing; w.demoSave = demoSave;
+  w.demoSeq = demoSeq; w.woprBeat = woprBeat; w.woprChars = woprChars;
+  w.woprHold = woprHold; w.woprLine = woprLine; w.woprFx = woprFx;
+  w.woprBlinkFrom = woprBlinkFrom;
+  // The cabinet keeps the best of every credit ever played on it.
+  if (!demoing) {
+    hiScores.pac = Math.max(hiScores.pac, scores.pac);
+    hiScores.frog = Math.max(hiScores.frog, scores.frog);
+  }
+}
+
 function scanTanks() {
   let names;
   try {
@@ -871,48 +985,65 @@ function scanTanks() {
     const tp = (lines[0] || '').trim();
     if (!tp) continue;
     const cols = Math.min(400, Math.max(40, parseInt(lines[1], 10) || 80));
-    seen.add(tp);
-    const t = tanks.get(tp);
-    if (t) {
-      t.cols = cols;
+    // The marker's own name is the session key — the same name statusline.sh
+    // derives from its transcript path to know which frame to print.
+    const key = name.replace(/\.path$/, '');
+    seen.add(key);
+    const w = worlds.get(key);
+    if (w) {
+      w.cols = cols;
+      w.tp = tp;
+      const playing = fs.existsSync(path.join(PLAY, key));
+      if (playing && !w.playing) Object.assign(w, newWorld(tp, cols), { key, tp, cols, offset: w.offset, partial: w.partial }); // a fresh credit
+      w.playing = playing;
     } else {
-      let size = 0;
+      const fresh = newWorld(tp, cols);
+      fresh.key = key;
+      fresh.playing = fs.existsSync(path.join(PLAY, key));
       try {
-        size = fs.statSync(tp).size;
+        fresh.offset = fs.statSync(tp).size; // adopt at the end: no replay stampede
       } catch {}
-      tanks.set(tp, { offset: size, partial: '', cols }); // adopt at the end: no replay stampede
+      worlds.set(key, fresh);
     }
   }
-  for (const tp of tanks.keys()) if (!seen.has(tp)) tanks.delete(tp);
+  for (const key of [...worlds.keys()]) {
+    if (seen.has(key)) continue;
+    worlds.delete(key); // window closed: its cabinet goes dark
+    try {
+      fs.unlinkSync(path.join(ARCADE, 'frame.' + key));
+    } catch {}
+  }
   return seen.size;
 }
 
-function tailAll() {
-  for (const [tp, s] of tanks) {
-    let size;
-    try {
-      size = fs.statSync(tp).size;
-    } catch {
-      continue;
-    }
-    if (size < s.offset) {
-      s.offset = 0;
-      s.partial = '';
-    }
-    if (size === s.offset) continue;
-    const fd = fs.openSync(tp, 'r');
-    const buf = Buffer.alloc(size - s.offset);
-    fs.readSync(fd, buf, 0, buf.length, s.offset);
-    fs.closeSync(fd);
-    s.offset = size;
-    const lines = (s.partial + buf.toString('utf8')).split('\n');
-    s.partial = lines.pop();
-    for (const line of lines) if (line.trim()) harvest(line);
+// Tail one session's transcript into the world it belongs to. Only this
+// session's tool calls put creatures on this window's line.
+function tailWorld(w) {
+  let size;
+  try {
+    size = fs.statSync(w.tp).size;
+  } catch {
+    return;
   }
+  if (size < w.offset) {
+    w.offset = 0;
+    w.partial = '';
+  }
+  if (size === w.offset) return;
+  const fd = fs.openSync(w.tp, 'r');
+  const buf = Buffer.alloc(size - w.offset);
+  fs.readSync(fd, buf, 0, buf.length, w.offset);
+  fs.closeSync(fd);
+  w.offset = size;
+  const lines = (w.partial + buf.toString('utf8')).split('\n');
+  w.partial = lines.pop();
+  for (const line of lines) if (line.trim()) harvest(line);
 }
 
+// Frames are keyed by session, not by width: two windows the same size are
+// still two different games, and would otherwise print each other's frame.
 function writeFrame(cols, line) {
-  const frame = path.join(ARCADE, 'frame.' + cols);
+  const frame = path.join(ARCADE, 'frame.' + currentKey);
   fs.writeFileSync(frame + '.tmp', line);
   fs.renameSync(frame + '.tmp', frame);
 }
@@ -961,34 +1092,129 @@ function renderSafariFor(cols) {
   writeFrame(cols, SAFARI_GROUND + cells.join('') + '\x1b[0m');
 }
 
-// The Ms. Pac-Man renderer, shared by the Unicode and sprite editions. Game
-// mutations (eating, dying, scoring) run only for the canonical (widest)
-// view; other widths just draw.
+// ---------------------------------------------------------------- the world
+//
+// Everything that HAPPENS happens here, once a tick, in world columns: one
+// playfield mazeWidth() wide, whatever terminals are open. The renderers below
+// only project it.
+//
+// It used to live inside the renderers, gated on `canonical = cols === maxCols`
+// — so the game was played in whichever window was widest, and every other
+// window drew the same sprites with none of the rules: ghosts slid through her,
+// gums went uneaten, the score never moved. Two windows of different sizes is
+// the normal case, not an edge case.
+//
+// World columns count from the LEFT. Her d and the creatures' d count from the
+// right (they enter at d=0 on the right edge), hence `ww - 2 - d`.
+function worldCol(d) {
+  return mazeWidth() - 2 - Math.round(d);
+}
+
+function interact(pacTheme, frogTheme) {
+  const ww = mazeWidth();
+  if (pacTheme) {
+    const lap = ww - 1;
+    const herD = ((Math.round(pacD) % lap) + lap) % lap;
+    const herCol = ww - 2 - herD;
+    // A jump of more than half the maze is a lap wrap (or a respawn, or a
+    // resize): the dots grow back and the gums come with them.
+    if (!swept || swept.ww !== ww || Math.abs(swept.last - herCol) > ww / 2) {
+      swept = { lo: herCol, hi: herCol, prevLo: herCol, prevHi: herCol, last: herCol, ww };
+    } else {
+      swept.prevLo = swept.lo;
+      swept.prevHi = swept.hi;
+      swept.lo = Math.min(swept.lo, herCol);
+      swept.hi = Math.max(swept.hi, herCol);
+      swept.last = herCol;
+    }
+    const justSwept = (x) =>
+      x >= swept.lo && x <= swept.hi && !(x >= swept.prevLo && x <= swept.prevHi);
+
+    const takeGum = () => {
+      fright = FRIGHT_TICKS;
+      combo = 200;
+      scores.pac += 50;
+      // A gum re-decides which way she faces, the way the cabinet reverses
+      // every ghost the instant you take one.
+      lastUturnTick = -9999;
+    };
+    if (dying === 0) {
+      for (const frac of POWER_GUMS) if (justSwept(Math.floor((ww - 2) * frac))) takeGum();
+      gums = gums.filter((gum) => {
+        if (justSwept(worldCol(gum.g))) {
+          takeGum();
+          return false; // eaten — gone for good
+        }
+        return true;
+      });
+
+      for (const f of fish) {
+        if (f.ghostIdx === null || f.eaten) continue;
+        const gc = worldCol(f.d);
+        if (gc < 0 || gc > ww - 1) continue;
+        if (Math.abs(gc - herCol) > 1) continue;
+        if (fright > 0) {
+          f.eaten = true; // gulp — eyes flee right, back home
+          scores.pac += combo;
+          combo = Math.min(1600, combo * 2);
+        } else if (invuln === 0 && (ticks + gc) % 4 === 0) {
+          dying = DYING_TICKS; // caught. the maze goes quiet
+        }
+      }
+
+      if (fruit && Math.abs(Math.round(fruit.e) - herCol) <= 1) {
+        scores.pac += FRUIT_VALUES[fruit.idx];
+        eatenFruits.push(fruit.glyph);
+        eatenFruits = eatenFruits.slice(-3);
+        fruit = null;
+      }
+    }
+  }
+
+  if (frogTheme) {
+    const frogCol = Math.min(ww - 1, Math.round(frogD));
+    if (squash === 0) {
+      gums = gums.filter((gum) => {
+        if (worldCol(gum.g) === frogCol) {
+          scores.frog += 200; // gulp
+          return false;
+        }
+        return true;
+      });
+      for (const f of fish) {
+        const k = f.froggerKind;
+        if (k !== 'car' && k !== 'truck') continue;
+        if (worldCol(f.d) === frogCol) squash = SQUASH_TICKS; // splat
+      }
+      if (frogCol >= ww - 1) {
+        homes++;
+        scores.frog += homes % 5 === 0 ? 1000 : 50; // fifth home fills the row
+        frogD = 0;
+      }
+    }
+  }
+}
+
+// The Ms. Pac-Man renderer, shared by the Unicode and sprite editions. It only
+// draws: every rule lives in interact(), above.
 function renderPacFor(cols, sprites) {
   const Wt = Math.max(20, cols - MARGIN);
   const hud = Wt >= HUD_MIN_COLS;
   const scoreW = hud ? HUD_SCORE_W : 0;
   const trophyW = hud ? HUD_TROPHY_W : 0;
   const W = Wt - scoreW - trophyW;
-  const canonical = cols === maxCols;
   const lap = W - 1;
   const pos = W - 2 - (((Math.round(pacD) % lap) + lap) % lap);
 
   const cells = new Array(W);
   const taken = new Array(W).fill(false);
-  // Dots disappear only where she has swept this lap; a pos jump of more than
-  // half the row is a lap wrap (or respawn, or resize) — the field refills.
-  let tr = dotTrail.get(cols);
-  if (!tr || tr.W !== W || Math.abs(tr.last - pos) > W / 2) tr = { lo: pos, hi: pos, last: pos, W };
-  const prevLo = tr.lo; // the swept span as it stood BEFORE this tick — the
-  const prevHi = tr.hi; // difference is what she has just cleared
-  tr.lo = Math.min(tr.lo, pos);
-  tr.hi = Math.max(tr.hi, pos);
-  tr.last = pos;
-  dotTrail.set(cols, tr);
-  const swept = (x) => x >= tr.lo && x <= tr.hi; // eaten this lap
-  const justSwept = (x) => swept(x) && !(x >= prevLo && x <= prevHi);
-  for (let i = 0; i < W; i++) cells[i] = i >= tr.lo && i <= tr.hi ? ' ' : '·';
+  // Dots are gone where she has swept this lap. The swept span belongs to the
+  // world now — interact() maintains it — so drawing is a straight read of it
+  // rather than a per-view trail that each window computed for itself.
+  const lo = swept ? swept.lo : pos;
+  const hi = swept ? swept.hi : pos;
+  const eaten = (x) => x >= lo && x <= hi;
+  for (let i = 0; i < W; i++) cells[i] = eaten(i) ? ' ' : '·';
 
   const putWide = (xi, glyph) => {
     if (xi < 0 || xi > W - 2 || taken[xi] || taken[xi + 1]) return;
@@ -997,77 +1223,23 @@ function renderPacFor(cols, sprites) {
     taken[xi] = taken[xi + 1] = true;
   };
 
-  // Gums: baseline pair (respawn each lap) + gums dropped by Claude. Gums
-  // near each other read as a rendering bug (power pellets sit far apart on
-  // the cabinet), so a gum within 12 columns of an already-placed one stays
-  // hidden (and uneatable) until the field clears.
+  // Gums: the fixed pair that respawn each lap, plus the ones Claude's replies
+  // drop. Gums near each other read as a rendering bug (power pellets sit far
+  // apart on the cabinet), so one within 12 columns of an already-placed one
+  // stays hidden until the field clears. Eating them is interact()'s business.
   const gumCell = GUM_COLOR + '●' + PAC_WATER;
   const gumCols = [];
   const gumRoom = (gx) => gumCols.every((c) => Math.abs(c - gx) >= 12);
-  for (const frac of POWER_GUMS) {
-    const gx = Math.floor(W * frac);
-    // Eating fires on the tick her sweep first covers the gum — once. Testing
-    // gx === pos instead re-fired for every tick she stood on that column,
-    // paying 50 a tick and re-arming fright; and at boost speed she could step
-    // clean over the column and eat nothing at all.
-    if (justSwept(gx) && dying === 0 && canonical) {
-      fright = FRIGHT_TICKS;
-      combo = 200;
-      scores.pac += 50;
-      // A gum re-decides which way she faces, the way the cabinet reverses
-      // every ghost the instant you take one. Without clearing the cooldown
-      // she almost never could turn: fleeing is what carries her onto a gum
-      // in the first place, so the 25-tick block covered the whole window.
-      lastUturnTick = -9999;
-    }
-    // Visible until she has swept it, then GONE until the lap wraps and the
-    // field refills — the same rule the dots follow. (This used to draw only
-    // where gx < pos, so the gum popped into existence as she ate it.)
-    if (!swept(gx) && !taken[gx]) {
-      cells[gx] = gumCell;
-      taken[gx] = true;
-      gumCols.push(gx);
-    }
-  }
-  gums = gums.filter((gum) => {
+  const putGum = (gx) => {
+    if (gx < 0 || gx > W - 1 || eaten(gx) || taken[gx]) return;
+    cells[gx] = gumCell;
+    taken[gx] = true;
+    gumCols.push(gx);
+  };
+  for (const frac of POWER_GUMS) putGum(Math.floor((W - 2) * frac));
+  for (const gum of gums) {
     const gx = W - 2 - Math.round(gum.g);
-    if (gx < 0 || gx > W - 1) return true;
-    // Eating is tested FIRST and by swept range, not by gx === pos. The old
-    // order let the spacing rule skip the whole check, so a gum sitting near
-    // another was invisible AND uneatable — she walked over it, nothing
-    // happened, and it reappeared later still uneaten.
-    if (justSwept(gx) && dying === 0) {
-      if (!canonical) return true;
-      fright = FRIGHT_TICKS;
-      combo = 200;
-      scores.pac += 50;
-      lastUturnTick = -9999; // as above: let her turn and hunt straight away
-      return false; // eaten — gone for good
-    }
-    if (gumRoom(gx) && !taken[gx]) {
-      cells[gx] = gumCell;
-      taken[gx] = true;
-      gumCols.push(gx);
-    }
-    return true;
-  });
-
-  // Ghost encounters (canonical only mutates).
-  if (canonical && dying === 0) {
-    for (const f of fish) {
-      if (f.ghostIdx === null) continue; // fifth fish, not a ghost
-      const xi = W - 2 - Math.round(f.d);
-      if (xi < 0 || xi > W - 1 || f.eaten) continue;
-      if (Math.abs(xi - pos) <= 1) {
-        if (fright > 0) {
-          f.eaten = true; // gulp — eyes flee right, back home
-          scores.pac += combo;
-          combo = Math.min(1600, combo * 2);
-        } else if (invuln === 0 && (ticks + xi) % 4 === 0) {
-          dying = DYING_TICKS; // caught. the maze goes quiet
-        }
-      }
-    }
+    if (gumRoom(gx)) putGum(gx);
   }
 
   // Her sprite goes down first so she always wins the cell contest. Arcade
@@ -1138,19 +1310,7 @@ function renderPacFor(cols, sprites) {
     putGhost(xi, color + glyph + PAC_WATER);
   }
 
-  if (fruit) {
-    const fx = Math.round(fruit.e);
-    if (Math.abs(fx - pos) <= 1 && dying === 0) {
-      if (canonical) {
-        scores.pac += FRUIT_VALUES[fruit.idx];
-        eatenFruits.push(fruit.glyph);
-        eatenFruits = eatenFruits.slice(-3);
-        fruit = null;
-      }
-    } else {
-      putWide(fx, fruit.glyph);
-    }
-  }
+  if (fruit) putWide(Math.round(fruit.e), fruit.glyph);
 
   let line = PAC_WATER;
   if (hud) {
@@ -1165,42 +1325,27 @@ function renderPacFor(cols, sprites) {
 
 // Frogger on one line: the frog hops rightward toward home (the right edge),
 // traffic drives leftward at him. Cars and trucks squash; logs and turtles
-// are just flotsam he clears; flies are bonus points. Same rule as the pac
-// renderer: only the canonical (widest) view mutates the game.
+// are just flotsam he clears; flies are bonus points. Draws only, like the pac
+// renderer: the rules are in interact().
 function renderFrogFor(cols) {
   const Wt = Math.max(20, cols - MARGIN);
   const hud = Wt >= HUD_MIN_COLS;
   const scoreW = hud ? HUD_SCORE_W : 0;
   const trophyW = hud ? HUD_TROPHY_W : 0;
   const W = Wt - scoreW - trophyW;
-  const canonical = cols === maxCols;
   const fx = Math.min(W - 1, Math.round(frogD));
 
   const cells = new Array(W);
   const taken = new Array(W).fill(false);
   for (let i = 0; i < W; i++) cells[i] = i % 4 === 2 ? '·' : ' '; // dashed lane markers
 
-  // flies (dropped by Claude's replies; the gum list, reused)
-  gums = gums.filter((gum) => {
+  // flies (dropped by Claude's replies; the gum list, reused). Eating them,
+  // reaching home and getting squashed all happen in interact() now.
+  for (const gum of gums) {
     const gx = W - 2 - Math.round(gum.g);
-    if (gx < 0 || gx > W - 1) return true;
-    if (gx === fx && squash === 0) {
-      if (!canonical) return true;
-      scores.frog += 200; // gulp
-      return false;
-    }
-    if (!taken[gx]) {
-      cells[gx] = HUD_COLOR + SPR_FLY + PAC_WATER;
-      taken[gx] = true;
-    }
-    return true;
-  });
-
-  // home! the right bank
-  if (canonical && squash === 0 && fx >= W - 1) {
-    homes++;
-    scores.frog += homes % 5 === 0 ? 1000 : 50; // fifth home fills the row
-    frogD = 0;
+    if (gx < 0 || gx > W - 1 || taken[gx]) continue;
+    cells[gx] = HUD_COLOR + SPR_FLY + PAC_WATER;
+    taken[gx] = true;
   }
 
   // Reserve the frog's cell before the traffic draws, so nothing gets nudged
@@ -1212,9 +1357,6 @@ function renderFrogFor(cols) {
     const xi = W - 2 - Math.round(f.d);
     if (xi < 0 || xi > W - 1) continue;
     const k = f.froggerKind;
-    if (canonical && squash === 0 && xi === fx && (k === 'car' || k === 'truck')) {
-      squash = SQUASH_TICKS; // splat
-    }
     const glyph = k === 'car' ? SPR_CAR : k === 'truck' ? SPR_TRUCK : k === 'log' ? SPR_LOG : SPR_TURTLE;
     const color = k === 'car' ? CAR_COLORS[f.hue] : k === 'truck' ? TRUCK_COLOR : k === 'log' ? LOG_COLOR : TURTLE_COLOR;
     putSpacedNear(cells, taken, xi, color + glyph + PAC_WATER, W);
@@ -1428,13 +1570,8 @@ function renderWoprFor(cols, idle) {
   writeFrame(cols, body + WOPR_ON + ' '.repeat(Math.max(0, W - vis)) + '\x1b[0m');
 }
 
-let prevWidthsKey = '';
-
 function render() {
-  const widths = new Set();
-  for (const t of tanks.values()) widths.add(t.cols);
-  if (widths.size === 0) widths.add(maxCols);
-  maxCols = Math.max(...widths);
+  const cols = maxCols; // the loaded world's own window — its only view
   const t = theme();
   const frog = /frog/.test(t);
   const wopr = /wopr/.test(t);
@@ -1442,32 +1579,12 @@ function render() {
   // demoing already means attract fired and demo mode took it over: the reel
   // draws the game, not the coin screen.
   const attract = !demoing && (isPacTheme(t) || frog) && attractNow();
-  for (const cols of widths) {
-    if (wopr) renderWoprFor(cols, woprIdle);
-    else if (attract) renderAttractFor(cols, frog);
-    else if (isPacTheme(t)) renderPacFor(cols, spriteFont());
-    else if (frog) renderFrogFor(cols);
-    else if (/safari/.test(t)) renderSafariFor(cols);
-    else renderSeaFor(cols);
-  }
-
-  const key = [...widths].sort((a, b) => a - b).join(',');
-  if (key !== prevWidthsKey) {
-    prevWidthsKey = key;
-    let names;
-    try {
-      names = fs.readdirSync(ARCADE);
-    } catch {
-      return;
-    }
-    for (const n of names) {
-      if (!/^frame(\.|$)/.test(n)) continue;
-      if (widths.has(parseInt(n.slice(6), 10))) continue;
-      try {
-        fs.unlinkSync(path.join(ARCADE, n));
-      } catch {}
-    }
-  }
+  if (wopr) renderWoprFor(cols, woprIdle);
+  else if (attract) renderAttractFor(cols, frog);
+  else if (isPacTheme(t)) renderPacFor(cols, spriteFont());
+  else if (frog) renderFrogFor(cols);
+  else if (/safari/.test(t)) renderSafariFor(cols);
+  else renderSeaFor(cols);
 }
 
 let lastFresh = Date.now();
@@ -1499,8 +1616,44 @@ function tick() {
     saveState();
     process.exit(0);
   }
-  tailAll();
+  for (const w of worlds.values()) {
+    loadWorld(w);
+    tailWorld(w);
+    simulate(w);
+    storeWorld(w);
+  }
+  if (ticks % 25 === 0) saveState();
+}
 
+// The cabinet before anyone has played it: no game running, just the offer of
+// one. A window that has never been started must never quietly begin playing —
+// this line is the whole of what a new session shows until you say otherwise.
+function renderDormantFor(cols) {
+  const W = Math.max(20, cols - MARGIN);
+  // The id is on screen in the window it belongs to, so the command that starts
+  // THIS cabinet is the one you can read. Spell out where to type it too — a
+  // bare command in a status line doesn't say whether it wants a shell, this
+  // prompt, or something else. `!` runs it in this session without leaving it.
+  const id = currentKey.split('-')[0];
+  const cmd = '!arcade start ' + id;
+  const msg = [
+    'INSERT COIN  ·  type  ' + cmd + '  at this prompt (or arcade start ' + id + ' in any shell)',
+    'INSERT COIN  ·  type  ' + cmd + '  at this prompt',
+    'INSERT COIN  ·  ' + cmd,
+    cmd,
+    'arcade start',
+  ].find((m) => m.length <= W - 2) || '';
+  const pad = Math.max(0, Math.floor((W - msg.length) / 2));
+  const line = (' '.repeat(pad) + msg).padEnd(W).slice(0, W);
+  writeFrame(cols, '\x1b[0;2;37m' + PAC_BG + line + '\x1b[0m');
+}
+
+// One window's turn: its own transcript, its own creatures, its own maze.
+function simulate(w) {
+  if (!w.playing) {
+    renderDormantFor(maxCols);
+    return;
+  }
   const t = theme();
   const pacTheme = isPacTheme(t);
   const frogTheme = /frog/.test(t);
@@ -1521,16 +1674,10 @@ function tick() {
   if (woprTheme) {
     const idle = attractNow() && !demoOn();
     if (!idle) woprTick();
-    // Returning early skips the save at the bottom of tick(), so do it here:
-    // switching to WOPR must not strand the last few seconds of a Ms. Pac-Man
-    // run unwritten. WOPR itself keeps nothing — a fresh daemon starts at the
-    // logon screen, which is where the film starts too.
-    if (ticks % 25 === 0) saveState();
     render();
     return;
   }
   if (attract && !demo) {
-    if (ticks % 25 === 0) saveState();
     render();
     return;
   }
@@ -1563,7 +1710,13 @@ function tick() {
       }
     } else {
       f.d += f.speed;
-      f.speed = Math.max(0.08, f.speed * 0.985);
+      // Creatures dart in and settle to an amble. The floor is what they spend
+      // most of their life at, so it — not the entry speed — is the speed you
+      // actually see: at 0.08 it was one column every two and a half seconds,
+      // and a wide terminal took over three minutes to cross. A column a
+      // second is the floor now, which is also the fastest a statusline
+      // sitting idle can show without the motion reading as teleporting.
+      f.speed = Math.max(0.2, f.speed * 0.99);
     }
   }
   fish = fish.filter((f) => f.d < maxCols && f.d > -1);
@@ -1657,7 +1810,7 @@ function tick() {
     if (fruit.e > maxCols) fruit = null;
   }
 
-  if (ticks % 25 === 0) saveState();
+  interact(pacTheme, frogTheme);
   render();
 }
 
