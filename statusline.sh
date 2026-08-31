@@ -53,8 +53,17 @@ if [ -n "${sid:-}" ] && [ -n "${tp:-}" ]; then
   [ "$legacy" != "$ARCADE/tanks/$sid.path" ] && rm -f "$legacy"
 fi
 
+# Start the daemon fully detached. Claude Code captures this script's output
+# through a pipe and waits for end-of-file on it; a background child that the
+# shell still tracks keeps that pipe alive, so the refresh that starts the
+# daemon never returns and the frame it was fetching is never printed. Closing
+# stdin and disowning the job is what makes this return immediately — measured:
+# hangs indefinitely without, 0.0s with.
 if ! kill -0 "$(cat "$ARCADE/pid" 2>/dev/null)" 2>/dev/null; then
-  [ -n "$NODE" ] && nohup "$NODE" "$ARCADE/arcaded.js" >/dev/null 2>&1 &
+  if [ -n "$NODE" ]; then
+    nohup "$NODE" "$ARCADE/arcaded.js" >/dev/null 2>&1 </dev/null &
+    disown
+  fi
 fi
 
 # This session's own frame, and only ever this one — another window's frame is
