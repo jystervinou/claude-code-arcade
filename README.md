@@ -17,7 +17,8 @@ the logon, the list of games, and a game of Global Thermonuclear War.
 ![Ms. Pac-Man running in the Claude Code status line](docs/ms-pacman.gif)
 
 *Twenty seconds of the attract reel, playing itself while Claude is idle.
-[Still](docs/ms-pacman.png) · [MP4](docs/ms-pacman.mp4).*
+[Still](docs/ms-pacman.png) ·
+[MP4](https://github.com/jystervinou/claude-code-arcade/raw/main/docs/ms-pacman.mp4).*
 
 ## Setup
 
