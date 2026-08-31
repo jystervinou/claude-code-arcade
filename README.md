@@ -5,8 +5,9 @@
 An arcade running in your Claude Code status line, animated by whatever Claude
 is doing. It works, the arcade plays.
 
-Ms. Pac-Man. Frogger. Or an aquarium and a safari, if you want something calmer.
-They play themselves — grab the joystick if you want, but you don't have to.
+Ms. Pac-Man. R-Type. Frogger. Or an aquarium and a safari, if you want
+something calmer. They play themselves — grab the joystick if you want, but you
+don't have to.
 
 Every window is its own cabinet: its own game, its own creatures, its own score,
 played by whatever Claude is doing in *that* session.
@@ -58,6 +59,7 @@ arcade start            put a coin in (the id is in the status line)
 arcade stop             game over
 arcade reset            start this window's game over (WOPR restarts the film)
 arcade theme mspacman   Ms. Pac-Man
+arcade theme rtype      R-Type
 arcade theme frogger    Frogger
 arcade theme wopr       W.O.P.R., typing its way through WarGames
 arcade theme aquarium   🐟🐠🐡🦐🦀🦞🪼 / 🦈🐋🐳🐬🐙🦑🐢🦭🐊
@@ -84,6 +86,29 @@ She plays herself: laps the maze, eats the dots, runs from ghosts, doubles back
 for fruit. Real arcade scoring — each window plays its own credit from zero, and
 the best any credit has ever reached is kept as the high score (`arcade status`).
 
+## R-Type
+
+`arcade theme rtype` puts the R-9 on the left of the line and sends Claude's
+work at it from the right: every Read is a Bydo drone, every Write an armored
+gunship that takes three hits. Claude's replies drop a Force pod — catch it and
+it clamps onto the nose, doubles your fire and eats whatever it touches.
+
+**And they shoot back.** On a single row there is nowhere to dodge to, so a bolt
+already in the air is stopped by your own fire meeting it head-on, by the Force
+parked in front of you, or not at all — which is what turns the endless firing
+into the defence rather than a shooting gallery. A hit knocks the Force loose;
+without it, you lose the ship.
+
+The beam meter on the right fills on its own; when it is full the wave cannon
+goes off and takes the whole line with it, their fire included. Every few
+minutes a stage boss noses in — four cells of Bydo, with its health in place of
+the beam meter while it lives. Kill it and the stage goes up: faster Bydo,
+thicker armour, more incoming.
+
+Its cast is drawn on a 24×16 grid across three cells, at full line height — the
+biggest sprites in the arcade. One row of a terminal, repainted about once a
+second, leaves the sprite doing all the work.
+
 ## Switching it off
 
 ```
@@ -103,14 +128,20 @@ next refresh. `arcade status` says which way the switch is set.
 
 ## Taking the joystick (optional, and fiddly)
 
-Ms. Pac-Man and Frogger can be steered. The catch is that Claude Code owns
-every keystroke in its own window, so there are two ways in — neither is
+Ms. Pac-Man, R-Type and Frogger can be steered. The catch is that Claude Code
+owns every keystroke in its own window, so there are two ways in — neither is
 seamless, and the games are perfectly happy without you:
 
 ```
 arcade play          # in a SPARE terminal pane: ←/→ steer, ↑ boost
 arcade play global   # F1 ←, F2 →, F3 boost from any window (macOS)
 ```
+
+In R-Type those three are the whole cabinet: **F1 flies left, F2 right, F3
+fires** (←/→/↑ in a spare pane do the same). Charged, F3 lets the wave cannon
+go; short of that it still fires a bolt. Holding a direction key flies the ship
+continuously — one tap is a nudge, and the auto-pilot has it back about two
+seconds later, so the ship never stops dodging while you are not looking.
 
 `global` needs a one-time Accessibility grant. If your F-row does brightness
 and volume — Apple's default — those keys aren't F1/F2/F3 at all, so press
@@ -124,7 +155,7 @@ The installer sets this up for you; `arcade font remove` drops back to Unicode
 glyphs, and `mspacman` plays fine either way.
 
 The sprites are an original pixel font, and the trick is *where* they live:
-U+1CC10–1CC16, in Unicode 16's
+U+1CC10–1CC37, in Unicode 16's
 "Symbols for Legacy Computing Supplement" block (fittingly), which no font
 shipped with macOS covers. When the terminal's font has no glyph for a real
 codepoint, CoreText searches every installed font — and finds ours. (The
@@ -133,8 +164,10 @@ deliberately skips PUA in automatic fallback. And overriding Apple Color
 Emoji with a patched copy in `~/Library/Fonts` — the macmoji approach — is
 dead on macOS 26: the system copy always wins the name conflict.)
 
-Each glyph is drawn one square per pixel on a 16×16 grid, with color layers
-baked in — her bow is genuinely red, not tinted.
+Each glyph is drawn one square per pixel — 16×16 for the Ms. Pac-Man and
+Frogger cast, 24×16 across three cells for R-Type's — with color layers baked
+in, so her bow is genuinely red and the R-9's nose cone genuinely cyan, not
+tinted.
 
 Works on macOS and Linux. On Windows Terminal, stick to `mspacman` or `wopr`,
 neither of which needs a font at all.

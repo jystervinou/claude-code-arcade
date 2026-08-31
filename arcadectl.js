@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// arcadectl.js — joystick for the statusline Ms. Pac-Man.
+// arcadectl.js — joystick for the statusline games (Ms. Pac-Man, R-Type,
+// Frogger).
 // Run in any spare terminal pane: `arcade play`, or `arcade play <session>` to
 // steer one window. Keys register while this pane has focus; each running game
 // polls its input file every tick. Without a
-// joystick running she plays herself (and resumes auto-pilot ~30s after the
+// joystick running they play themselves (and resume auto-pilot ~30s after the
 // last input).
 'use strict';
 
@@ -33,7 +34,7 @@ if (!process.stdin.isTTY) {
 process.stdin.setRawMode(true);
 process.stdin.resume();
 process.stdin.setEncoding('utf8');
-console.log('🕹  Ms. Pac-Man joystick — ←/→ steer · ↑ boost · (F1/F2/F3 too) · q quits');
+console.log('🕹  arcade joystick — ←/→ steer · ↑ boost, or fire in R-Type · (F1/F2/F3 too) · q quits');
 
 let buf = '';
 process.stdin.on('data', (k) => {

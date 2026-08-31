@@ -14,6 +14,9 @@
 //              sprites-gen.js), Unicode glyphs when it isn't. ("arcade" is
 //              still accepted as a name for it — it used to be the separate
 //              sprite edition.)
+//   "rtype"    R-Type: the R-9 holds the left of the line, Claude's file
+//              touches come at it from the right as Bydo, and the wave cannon
+//              takes the whole row with it.
 //   "frogger"  the frog crosses the line through Claude's traffic (its glyphs
 //              live only in the sprite font, so that one IS required).
 //   "wopr"     the WOPR terminal from WarGames: no game at all, a CRT typing
@@ -178,6 +181,85 @@ const LOG_COLOR = '\x1b[0;33m' + PAC_BG;
 const TURTLE_COLOR = '\x1b[0;32m' + PAC_BG;
 const SQUASH_COLOR = '\x1b[0;91m' + PAC_BG;
 const SQUASH_TICKS = 10;
+
+// R-Type edition. The R-9 holds the left of the line and Claude's file touches
+// come at it from the right as Bydo: Reads are drones, Writes are armored
+// gunships that take three hits. Replies drop a Force pod — catch it and it
+// clamps onto the nose, kills what it touches and doubles the fire. The beam
+// meter fills on its own; when it is full the wave cannon takes the whole line
+// with it (the joystick's ↑ fires it early). Every few minutes a stage boss
+// noses in from the right and sits there soaking hits.
+//
+// These sprites are drawn on 24x24 rather than the 16x16 of the older cast:
+// one row at one frame a second gives the sprite all the work, so it gets
+// four times the pixels to do it with.
+const SPR_R9 = ['\u{1CC2B}', '\u{1CC2C}']; // thrust frames
+const SPR_FORCE = '\u{1CC2D}';
+const SPR_DRONE = '\u{1CC2E}';
+const SPR_GUNSHIP = '\u{1CC2F}';
+const SPR_BOSS = '\u{1CC30}'; // its head...
+const SPR_BOSS_BODY = '\u{1CC36}'; // ...and the rest of it, in the next cell over
+const SPR_SHOT = '\u{1CC31}';
+const SPR_FOE_SHOT = '\u{1CC37}'; // ...and the one coming the other way
+const SPR_WAVE = '\u{1CC32}'; // the head of the beam...
+const SPR_BEAM = '\u{1CC33}'; // ...and the bar its trail is made of
+const SPR_BOOM = ['\u{1CC34}', '\u{1CC35}'];
+// Without the font: no sprites, but still a game. (The colors below tint
+// these; on the sprites they are what Linux's monochrome fallback gets.)
+const UNI_R9 = ['➤', '➣'];
+const UNI_RT = { force: '◉', drone: '◆', gunship: '❖', boss: '☣', shot: '━', foeShot: '╼', wave: '◎', beam: '═' };
+const UNI_BOOM = ['✷', '✳'];
+
+const RT_SHIP_COLOR = '\x1b[0;1;97m' + PAC_BG;
+const RT_FORCE_COLOR = '\x1b[0;93m' + PAC_BG;
+const RT_DRONE_COLOR = '\x1b[0;92m' + PAC_BG;
+const RT_GUNSHIP_COLOR = '\x1b[0;95m' + PAC_BG;
+const RT_BOSS_COLOR = '\x1b[0;1;95m' + PAC_BG;
+const RT_SHOT_COLOR = '\x1b[0;93m' + PAC_BG;
+const RT_BEAM_COLOR = '\x1b[0;1;96m' + PAC_BG;
+const RT_BOOM_COLOR = '\x1b[0;1;91m' + PAC_BG;
+const RT_STAR_COLOR = '\x1b[0;2;34m' + PAC_BG;
+const RT_BOLT_COLOR = '\x1b[0;1;91m' + PAC_BG;
+const RT_BANNER_COLOR = '\x1b[0;1;97m' + PAC_BG;
+
+// A shot crosses about nine columns a second: fast enough to read as fired,
+// slow enough that a ~1s statusline sample still catches it on its way, and
+// short-lived enough that the line never fills up with bolts. Anything above
+// two columns a tick could also step clean over an enemy without touching it.
+const RT_SHOT_SPEED = 1.8;
+const RT_FIRE_EVERY = 8; // one shot per ~1.6s while there is anything to shoot
+const RT_RANGE = 60; // it does not waste ammunition on empty space
+const RT_CHARGE_FULL = 90; // ~18s to a full beam: it is the punctuation, not the sentence
+const RT_CHARGE_MIN = 30; // ...and the least it will fire on demand
+const RT_WAVE_SPEED = 2.2;
+const RT_WAVE_LEN = 10; // how far the beam trails behind its head, in columns
+const RT_BOOM_TICKS = 8;
+const RT_DEAD_TICKS = 12;
+const RT_DRONE_SCORE = 200;
+const RT_GUNSHIP_SCORE = 500;
+const RT_POD_SCORE = 500;
+const RT_BOSS_SCORE = 5000;
+const RT_BOSS_HP = 15;
+const RT_BOSS_FIRST = parseInt(process.env.ARCADE_RT_BOSS, 10) || 900; // ~3min in
+const RT_BOSS_EVERY = 1800;
+const RT_BOSS_HOLD = 0.58; // where it stops coming and starts sitting there
+// How long one press of ←/F1 or →/F2 owns the ship. Short on purpose: the keys
+// arrive as separate presses, so holding one down (auto-repeat) flies it
+// continuously, while a single tap is a nudge the auto-pilot recovers from.
+// The other cabinets hand the whole game over for 30s per input; a shooter
+// that stopped dodging for half a minute after one tap would just die.
+const RT_STEER_TICKS = 10;
+
+// They shoot back, and on a single row there is nowhere to dodge to: a bolt
+// closing on you is stopped by your own fire meeting it, by the Force parked in
+// front of you, or not at all. That is the whole game — the endless firing has
+// to BE the defence, or it is a shooting gallery.
+const RT_BOLT_SPEED = 1.1; // slower than ours, so a duel lasts long enough to see
+const RT_BOLT_EVERY = 60; // per enemy, at stage 1; six ticks less every stage
+const RT_BOLT_SCORE = 50; // shooting one down pays, so the stream is worth keeping up
+const RT_BANNER_TICKS = 18; // ~3.5s of STAGE n across the line
+const RT_ABREAST = 5; // columns the Bydo keep between them, so none is ever hidden
+const RT_HITBOX = 4; // ...and how far right of its column a sprite still counts as there
 
 // WOPR, from WarGames (1983): not a playfield at all, but a terminal printing
 // one character at a time while Claude works. Everything else here is a
@@ -527,7 +609,7 @@ let fruitIdx = 0;
 let fruitTimer = parseInt(process.env.ARCADE_FRUIT_FIRST, 10) || FRUIT_FIRST_TICKS;
 // Each cabinet keeps its own credit: a Frogger run must not inherit Ms.
 // Pac-Man's total, and switching themes mid-session must not clobber either.
-let scores = { pac: 0, frog: 0 };
+let scores = { pac: 0, frog: 0, rt: 0 };
 let combo = 200;
 let eatenFruits = [];
 let lastPacInt = 0;
@@ -543,6 +625,22 @@ let lastInputTick = -9999;
 let swept = null; // {lo, hi, prevLo, prevHi, last, ww}
 
 // Frogger world state.
+// R-Type. The ship counts columns from the LEFT, like the frog; everything
+// coming at it counts from the right, like everything else in here.
+let shipX = 2;
+let shots = []; // {x} in world columns, travelling right
+let booms = []; // {x, born} — what is left of something for RT_BOOM_TICKS
+let wave = null; // {x} the wave cannon's head, once it is loose
+let charge = 0;
+let force = 0; // the pod, once caught: it rides the nose until she is hit
+let boss = null; // {x, hp, hit}
+let bossTimer = RT_BOSS_FIRST;
+let fireTick = -9999;
+let lastSteerTick = -9999;
+let bolts = []; // {x} — their fire, travelling left
+let stage = 1;
+let banner = 0; // ticks left on the STAGE n card
+
 let frogD = 0; // cols from the LEFT bank
 let squash = 0;
 let homes = 0;
@@ -564,11 +662,12 @@ let woprBlinkFrom = 0; // tick the current line began, so the caret blinks from 
 // not "the" score but the best any credit has ever reached on this machine.
 // Older saves kept a single running total; it becomes the high score, which is
 // what it effectively was.
-const hiScores = { pac: 0, frog: 0 };
+const hiScores = { pac: 0, frog: 0, rt: 0 };
 try {
   const s = JSON.parse(fs.readFileSync(STATE, 'utf8'));
   hiScores.pac = (s.hi ? s.hi.pac : s.scores ? s.scores.pac : s.score) | 0;
   hiScores.frog = (s.hi ? s.hi.frog : s.scores ? s.scores.frog : 0) | 0;
+  hiScores.rt = (s.hi ? s.hi.rt : 0) | 0;
 } catch {}
 
 function saveState() {
@@ -579,7 +678,8 @@ function saveState() {
   // are the scores as they stand this second.
   try {
     const live = [...worlds.values()].map((w) => ({
-      key: w.key, cols: w.cols, playing: !!w.playing, pac: w.scores.pac, frog: w.scores.frog,
+      key: w.key, cols: w.cols, playing: !!w.playing,
+      pac: w.scores.pac, frog: w.scores.frog, rt: w.scores.rt,
     }));
     fs.writeFileSync(LIVE, JSON.stringify(live));
   } catch {}
@@ -608,9 +708,11 @@ function demoOn() {
 }
 
 function enterDemo() {
-  demoSave = { scores: { ...scores }, fruitIdx, homes, eatenFruits };
+  demoSave = { scores: { ...scores }, fruitIdx, homes, eatenFruits, bossTimer };
   scores.pac = 0;
   scores.frog = 0;
+  scores.rt = 0;
+  bossTimer = Math.min(bossTimer, 250); // the reel gets a boss inside a minute
   fruitIdx = 0; // the demo always replays level 1, cherries first
   homes = 0;
   eatenFruits = [];
@@ -620,6 +722,8 @@ function enterDemo() {
 function exitDemo() {
   scores.pac = demoSave.scores.pac;
   scores.frog = demoSave.scores.frog;
+  scores.rt = demoSave.scores.rt;
+  bossTimer = demoSave.bossTimer;
   fruitIdx = demoSave.fruitIdx;
   homes = demoSave.homes;
   eatenFruits = demoSave.eatenFruits;
@@ -668,6 +772,10 @@ function theme() {
 
 function isPacTheme(t) {
   return /pac|arcade/.test(t);
+}
+
+function isRtype(t) {
+  return /rtype|r-type|shoot/.test(t);
 }
 
 // There is ONE Ms. Pac-Man theme; it draws with whatever it has. With
@@ -722,15 +830,35 @@ function mazeWidth() {
   return playWidth(maxCols);
 }
 
-// The 7-column trophy slot on the right of the HUD: fruits she has eaten, or
-// frogs safely home. A demo run labels it DEMO instead — the reel's trophies
-// are not yours, and the word is the only tell that the score isn't real.
-// Only ever drawn when the HUD is on, where the slot is exactly 7 wide.
-function trophySlot(frog) {
+// The 7-column trophy slot on the right of the HUD: fruits she has eaten,
+// frogs safely home, or R-Type's beam meter. A demo run labels it DEMO
+// instead — the reel's trophies are not yours, and the word is the only tell
+// that the score isn't real. Only ever drawn when the HUD is on, where the
+// slot is exactly 7 wide.
+function trophySlot(kind) {
   if (demoing) return '   ' + '\x1b[0;2;37m' + PAC_BG + 'DEMO' + PAC_WATER;
-  if (frog) {
+  if (kind === 'frog') {
     const n = Math.min(homes % 5 || (homes ? 5 : 0), 5); // filled home slots this level
     return ' '.repeat(7 - n) + FROG_COLOR + SPR_FROG.sit.repeat(n) + PAC_WATER;
+  }
+  if (kind === 'rt') {
+    // While a boss is up, the slot is its health instead: the beam meter can
+    // wait, and what you want to know is whether the thing is nearly dead.
+    if (boss) {
+      const left = Math.max(1, Math.round((boss.hp / (boss.max || RT_BOSS_HP)) * 5));
+      return '  ' + RT_BOLT_COLOR + '█'.repeat(left) +
+        '\x1b[0;2;31m' + PAC_BG + '·'.repeat(5 - left) + PAC_WATER;
+    }
+    // The cabinet's beam meter: five cells filling as the wave cannon charges,
+    // white the moment it is loaded, with the Force lit beside it when the pod
+    // is riding the nose. It does not blink — a ~1s sampler turns any blink
+    // into random noise, and this is the one gauge you actually read.
+    const n = 5;
+    const lit = Math.min(n, Math.floor((charge / RT_CHARGE_FULL) * n));
+    const ready = charge >= RT_CHARGE_FULL;
+    const bar = (ready ? '\x1b[0;1;97m' : RT_BEAM_COLOR) + '█'.repeat(lit) +
+      '\x1b[0;2;34m' + PAC_BG + '·'.repeat(n - lit);
+    return (force ? RT_FORCE_COLOR + '◉' : ' ') + ' ' + bar + PAC_WATER;
   }
   const t = eatenFruits.slice(-3);
   return ' '.repeat(7 - 2 * t.length) + t.join(''); // fruit emoji are 2 cells each
@@ -740,10 +868,16 @@ function trophySlot(frog) {
 // gums[].g counts columns from the RIGHT edge.
 function dropGum() {
   if (ticks - lastGumTick < 50) return; // at most one per ~10s, or fright never ends
+  const t = theme();
+  // R-Type gives you ONE Force. Dropping a pod while you have it (or while one
+  // is still on its way) filled the line with pods nobody needed.
+  if (isRtype(t) && (force || gums.length)) return;
   lastGumTick = ticks;
-  const g = /frog/.test(theme())
-    ? Math.max(1, mazeWidth() - 2 - (frogD % mazeWidth()) - 10 - (ticks % 7))
-    : (pacD % (mazeWidth() - 1)) + 10 + (ticks % 7);
+  const g = isRtype(t)
+    ? 0 // a Force pod, and it flies in from the right like everything else
+    : /frog/.test(t)
+      ? Math.max(1, mazeWidth() - 2 - (frogD % mazeWidth()) - 10 - (ticks % 7))
+      : (pacD % (mazeWidth() - 1)) + 10 + (ticks % 7);
   gums.push({ g, born: ticks });
 }
 
@@ -773,9 +907,18 @@ function pollInput() {
     return;
   }
   lastInputTick = ticks;
-  if (c === 'L') pacDir = -1;
-  else if (c === 'R') pacDir = 1;
-  else if (c === 'B') boost = 15;
+  // Steering has its own clock: in R-Type the third key is a fire button, and
+  // firing must not also send the ship drifting in whatever direction it was
+  // last pushed.
+  if (c === 'L') {
+    pacDir = -1;
+    lastSteerTick = ticks;
+  } else if (c === 'R') {
+    pacDir = 1;
+    lastSteerTick = ticks;
+  } else if (c === 'B') {
+    boost = 15;
+  }
 }
 
 // One of each ghost on screen, like the cabinet: a spawn takes the first free
@@ -795,15 +938,21 @@ function spawnFish(tool, file) {
   // Ghosts drift slower than she runs (0.5/tick) so they linger and she
   // overtakes them; Frogger traffic keeps a steady lane speed; sea fish and
   // safari animals dart.
-  const slow = isPacTheme(t) || /frog/.test(t);
+  const rt = isRtype(t);
+  const slow = isPacTheme(t) || /frog/.test(t) || rt;
   fish.push({
     d: 0,
-    speed: slow ? 0.08 + (hash(tool + file) % 12) / 100 : 1.0 + (hash(tool + file) % 50) / 100,
+    speed: rt
+      ? 0.28 + (hash(tool + file) % 12) / 100 + stage * 0.02 // the Bydo close in faster than anything else here
+      : slow ? 0.08 + (hash(tool + file) % 12) / 100 : 1.0 + (hash(tool + file) % 50) / 100,
     seaGlyph: set[hash(file) % set.length],
     safariGlyph: safariSet[hash(file) % safariSet.length],
     ghostIdx: nextGhostIdx(),
     hue: hash(file) % GHOST_COLORS.length, // frogger traffic paint, ghost-independent
     froggerKind: big ? 'truck' : ['car', 'car', 'car', 'log', 'turtle'][hash(file + 'frog') % 5],
+    rtKind: big ? 'gunship' : 'drone', // ...and a Write is the armored one
+    hp: big ? 3 + Math.floor(stage / 2) : 1 + Math.floor(stage / 3),
+    fireAt: ticks + 40 + (hash(file) % 40), // it has to get on screen before it opens up
   });
   if (big) dropGum(); // a Write is worth a power gum
   if (fish.length > fishCap()) cullNearestExit();
@@ -911,7 +1060,10 @@ function newWorld(tp, cols) {
     pacD: 0, pacDir: 1, boost: 0, fright: 0, dying: 0, invuln: 0, combo: 200,
     eatenFruits: [], lastPacInt: 0, lastUturnTick: -9999, swept: null,
     frogD: 0, squash: 0, homes: 0,
-    scores: { pac: 0, frog: 0 },              // every window starts on a fresh credit
+    shipX: 2, shots: [], booms: [], wave: null, charge: 0, force: 0,
+    boss: null, bossTimer: RT_BOSS_FIRST, fireTick: -9999, lastSteerTick: -9999,
+    bolts: [], stage: 1, banner: 0,
+    scores: { pac: 0, frog: 0, rt: 0 },        // every window starts on a fresh credit
     lastEventTick: -1e9, replyDone: true, inputMtime: 0, lastInputTick: -9999,
     demoing: false, demoSave: null, demoSeq: 0,
     woprBeat: parseInt(process.env.ARCADE_WOPR_BEAT, 10) || 0,
@@ -922,7 +1074,9 @@ function newWorld(tp, cols) {
 const WORLD_FIELDS = [
   'fish', 'gums', 'lastGumTick', 'fruit', 'fruitIdx', 'fruitTimer', 'pacD', 'pacDir',
   'boost', 'fright', 'dying', 'invuln', 'combo', 'eatenFruits', 'lastPacInt',
-  'lastUturnTick', 'swept', 'frogD', 'squash', 'homes', 'scores', 'lastEventTick',
+  'lastUturnTick', 'swept', 'frogD', 'squash', 'homes', 'shipX', 'shots', 'booms',
+  'wave', 'charge', 'force', 'boss', 'bossTimer', 'fireTick', 'lastSteerTick',
+  'bolts', 'stage', 'banner', 'scores', 'lastEventTick',
   'replyDone', 'inputMtime', 'lastInputTick', 'demoing', 'demoSave', 'demoSeq',
   'woprBeat', 'woprChars', 'woprHold', 'woprLine', 'woprFx', 'woprBlinkFrom',
 ];
@@ -932,7 +1086,8 @@ function loadWorld(w) {
   maxCols = w.cols; // mazeWidth(), fishCap() and the renderers all read this
   ({ fish, gums, lastGumTick, fruit, fruitIdx, fruitTimer, pacD, pacDir, boost, fright,
      dying, invuln, combo, eatenFruits, lastPacInt, lastUturnTick, swept, frogD, squash,
-     homes, scores, lastEventTick, replyDone, inputMtime, lastInputTick, demoing,
+     homes, shipX, shots, booms, wave, charge, force, boss, bossTimer, fireTick,
+     lastSteerTick, bolts, stage, banner, scores, lastEventTick, replyDone, inputMtime, lastInputTick, demoing,
      demoSave, demoSeq, woprBeat, woprChars, woprHold, woprLine, woprFx,
      woprBlinkFrom } = w);
 }
@@ -943,7 +1098,11 @@ function storeWorld(w) {
   w.boost = boost; w.fright = fright; w.dying = dying; w.invuln = invuln;
   w.combo = combo; w.eatenFruits = eatenFruits; w.lastPacInt = lastPacInt;
   w.lastUturnTick = lastUturnTick; w.swept = swept; w.frogD = frogD; w.squash = squash;
-  w.homes = homes; w.scores = scores; w.lastEventTick = lastEventTick;
+  w.homes = homes; w.shipX = shipX; w.shots = shots; w.booms = booms;
+  w.wave = wave; w.charge = charge; w.force = force; w.boss = boss;
+  w.bossTimer = bossTimer; w.fireTick = fireTick; w.lastSteerTick = lastSteerTick;
+  w.bolts = bolts; w.stage = stage; w.banner = banner;
+  w.scores = scores; w.lastEventTick = lastEventTick;
   w.replyDone = replyDone; w.inputMtime = inputMtime; w.lastInputTick = lastInputTick;
   w.demoing = demoing; w.demoSave = demoSave;
   w.demoSeq = demoSeq; w.woprBeat = woprBeat; w.woprChars = woprChars;
@@ -953,6 +1112,7 @@ function storeWorld(w) {
   if (!demoing) {
     hiScores.pac = Math.max(hiScores.pac, scores.pac);
     hiScores.frog = Math.max(hiScores.frog, scores.frog);
+    hiScores.rt = Math.max(hiScores.rt, scores.rt);
   }
 }
 
@@ -1209,6 +1369,362 @@ function interact(pacTheme, frogTheme) {
   }
 }
 
+// R-Type's whole turn. The other themes split motion (simulate) from rules
+// (interact); this one keeps them together, because nearly every rule here IS
+// a motion — but like interact() it runs exactly once per world, in world
+// columns, however many windows are open.
+function rtypeTick() {
+  const ww = mazeWidth();
+  const shipCol = Math.round(shipX);
+  const forceCol = shipCol + 3; // just off the nose, one sprite-width ahead
+
+  // What is in the lane ahead, and how far off. The boss counts as traffic.
+  let gap = Infinity;
+  let ahead = 0;
+  for (const f of fish) {
+    if (f.gone) continue;
+    const c = worldCol(f.d);
+    if (c < shipCol) continue;
+    ahead++;
+    gap = Math.min(gap, c - shipCol);
+  }
+  if (boss) gap = Math.min(gap, Math.round(boss.x) - shipCol);
+  let boltGap = Infinity; // ...and the nearest thing coming the other way
+  for (const b of bolts) if (b.x >= shipCol) boltGap = Math.min(boltGap, b.x - shipCol);
+
+  const fireWave = () => {
+    if (wave || charge < RT_CHARGE_MIN) return;
+    wave = { x: shipCol + (force ? 4 : 3), spent: false }; // it leaves from the Force when there is one
+    charge = 0;
+  };
+  const kill = (f, x, wave2) => {
+    f.gone = true;
+    booms.push({ x, born: ticks });
+    const worth = f.rtKind === 'gunship' ? RT_GUNSHIP_SCORE : RT_DRONE_SCORE;
+    scores.rt += wave2 ? worth * 2 : worth; // the beam is worth spending
+  };
+  const bossHit = (dmg) => {
+    boss.hp -= dmg;
+    boss.hit = 4;
+  };
+
+  // --- the ship -------------------------------------------------------------
+  if (dying > 0) {
+    dying--;
+    if (dying === 0) {
+      shipX = 2;
+      invuln = INVULN_TICKS;
+      shots = [];
+      charge = 0;
+    }
+  } else {
+    pollInput();
+    if (boost > 0) {
+      // ↑ / F3 is the fire button. Charged, it lets the beam go; short of that
+      // it still fires a bolt — a fire button that does nothing at all reads
+      // as a broken one.
+      boost = 0;
+      if (charge >= RT_CHARGE_MIN) {
+        fireWave();
+      } else {
+        fireTick = ticks;
+        shots.push({ x: shipCol + 2 });
+        if (force) shots.push({ x: forceCol + 2 });
+      }
+    }
+    if (ticks - lastSteerTick <= RT_STEER_TICKS) shipX += 0.3 * pacDir; // the player has it
+    else if (gap < 8 || (boltGap < 7 && !force)) shipX -= 0.25; // give ground rather than take it
+    else if (gap > 20) shipX += 0.25; // press forward while the lane is clear
+    shipX = Math.max(0, Math.min(Math.floor(ww / 3), shipX)); // it holds the left third, like the cabinet
+    if (invuln > 0) invuln--;
+    charge = Math.min(RT_CHARGE_FULL, charge + 1);
+    // It shoots at what is there, not at empty space — and the wave cannon
+    // goes off on its own once the meter is full and it is worth spending.
+    if (ticks - fireTick >= RT_FIRE_EVERY && (gap < RT_RANGE || boltGap < RT_RANGE)) {
+      fireTick = ticks;
+      shots.push({ x: shipCol + 2 });
+      if (force) shots.push({ x: forceCol + 2 }); // the Force fires too
+    }
+    if (charge >= RT_CHARGE_FULL && (boss || ahead >= 4 || boltGap < 12)) fireWave();
+  }
+
+  // Formation, not a heap. Sprites two cells wide bunch up as they drift in,
+  // and the renderer used to slide them aside to find a free cell — which put
+  // them on screen up to six columns from where the game thought they were, so
+  // shots sailed straight through them. Space them here instead, in the world,
+  // and the picture cannot lie about it.
+  const line = fish.filter((f) => !f.gone).sort((a, b) => b.d - a.d); // leftmost first
+  for (let i = 1; i < line.length; i++) {
+    const room = line[i - 1].d - RT_ABREAST;
+    if (line[i].d > room) line[i].d = room; // whoever is behind holds back
+  }
+
+  // --- and they fire back ---------------------------------------------------
+  for (const f of fish) {
+    if (f.gone) continue;
+    if (f.rtKind !== 'gunship' && stage < 2) continue; // the drones only join in later
+    const c = worldCol(f.d);
+    if (c > ww - 2 || c < shipCol + 4) continue; // on the field, and still ahead of the ship
+    if (ticks < (f.fireAt || 0)) continue;
+    f.fireAt = ticks + Math.max(22, RT_BOLT_EVERY - stage * 6) + (ticks % 11);
+    bolts.push({ x: c - 1 });
+  }
+  if (boss && ticks >= (boss.fireAt || 0)) {
+    boss.fireAt = ticks + Math.max(18, 40 - stage * 4);
+    bolts.push({ x: boss.x - 1 });
+  }
+
+  // --- fire -----------------------------------------------------------------
+  for (const s of shots) s.x += RT_SHOT_SPEED;
+  shots = shots.filter((s) => {
+    if (s.x >= ww) return false;
+    for (const f of fish) {
+      if (f.gone) continue;
+      const c = worldCol(f.d);
+      if (s.x < c - 1 || s.x > c + RT_HITBOX) continue; // its whole drawn width, not one column
+      if (--f.hp <= 0) kill(f, c, false);
+      else booms.push({ x: c, born: ticks - RT_BOOM_TICKS + 3 }); // sparks off the armor
+      return false;
+    }
+    if (boss && s.x >= boss.x - 1 && s.x <= boss.x + 4) { // it is four cells wide
+      bossHit(1);
+      return false;
+    }
+    return true;
+  });
+
+  if (wave) {
+    wave.x += RT_WAVE_SPEED;
+    const lo = wave.x - RT_WAVE_LEN;
+    for (const f of fish) {
+      if (f.gone) continue;
+      const c = worldCol(f.d);
+      if (c >= lo && c <= wave.x + 1) kill(f, c, true);
+    }
+    bolts = bolts.filter((b) => b.x < lo || b.x > wave.x + 1); // it clears their fire as well
+    if (boss && !wave.spent && boss.x >= lo && boss.x <= wave.x + 2) {
+      wave.spent = true;
+      bossHit(6);
+    }
+    if (lo > ww) wave = null;
+  }
+
+  for (const b of bolts) b.x -= RT_BOLT_SPEED;
+  bolts = bolts.filter((b) => {
+    if (b.x < -1) return false;
+    const spark = (x) => booms.push({ x: Math.round(x), born: ticks - RT_BOOM_TICKS + 4 });
+    // Ours meets theirs and both go. On one row this is the only way to stop a
+    // bolt that is already in the air, which is what the ship's stream is FOR.
+    const s = shots.find((sh) => Math.abs(sh.x - b.x) <= RT_HITBOX);
+    if (s) {
+      s.gone = true;
+      spark(b.x);
+      scores.rt += RT_BOLT_SCORE;
+      return false;
+    }
+    if (force && b.x >= forceCol - 1 && b.x <= forceCol + RT_HITBOX) {
+      spark(b.x); // the Force eats it, as it eats everything
+      return false;
+    }
+    if (dying === 0 && invuln === 0 && b.x >= shipCol - 1 && b.x <= shipCol + RT_HITBOX) {
+      booms.push({ x: shipCol, born: ticks });
+      if (force) force = 0; // the pod takes the hit for you and is knocked loose
+      else dying = RT_DEAD_TICKS;
+      return false;
+    }
+    return true;
+  });
+  shots = shots.filter((s) => !s.gone);
+
+  // --- what it runs into ----------------------------------------------------
+  if (dying === 0) {
+    for (const f of fish) {
+      if (f.gone) continue;
+      const c = worldCol(f.d);
+      if (force && c >= forceCol - 1 && c <= forceCol + RT_HITBOX) {
+        kill(f, c, false); // the Force eats whatever it touches
+        continue;
+      }
+      if (c < shipCol - 1 || c > shipCol + RT_HITBOX || invuln > 0) continue;
+      f.gone = true;
+      booms.push({ x: shipCol, born: ticks });
+      dying = RT_DEAD_TICKS;
+      force = 0; // and the pod is knocked loose
+      wave = null;
+    }
+    if (boss && boss.x <= shipCol + 2 && invuln === 0) {
+      booms.push({ x: shipCol, born: ticks });
+      dying = RT_DEAD_TICKS;
+      force = 0;
+    }
+  }
+
+  // Force pods drift in with everything else; touching one is the upgrade.
+  gums = gums.filter((gum) => {
+    gum.g += 0.2;
+    const c = worldCol(gum.g);
+    if (c < -1) return false;
+    if (dying === 0 && Math.abs(c - shipCol) <= 1) {
+      force = 1;
+      scores.rt += RT_POD_SCORE;
+      return false;
+    }
+    return true;
+  });
+
+  // --- the stage boss -------------------------------------------------------
+  if (boss) {
+    if (boss.hit > 0) boss.hit--;
+    boss.x = Math.max(ww * RT_BOSS_HOLD, boss.x - 0.3); // it noses in, then sits there
+    if (boss.hp <= 0) {
+      scores.rt += RT_BOSS_SCORE * stage; // a later boss is worth what it cost
+      for (const dx of [-3, 0, 3]) booms.push({ x: Math.round(boss.x) + dx, born: ticks });
+      boss = null;
+      bossTimer = RT_BOSS_EVERY;
+      stage++; // ...and the next stage comes at you harder
+      banner = RT_BANNER_TICKS;
+    }
+  } else if (--bossTimer <= 0) {
+    const hp = RT_BOSS_HP + (stage - 1) * 4;
+    boss = { x: ww + 1, hp, max: hp, hit: 0, fireAt: ticks + 40 };
+  }
+  if (banner > 0) banner--;
+
+  booms = booms.filter((b) => ticks - b.born < RT_BOOM_TICKS);
+  // Past the left edge of the playfield is gone: the maze is narrower than the
+  // window whenever the HUD is on, and a Bydo that flew off it must not come
+  // back as a sprite nudged into the first free column.
+  fish = fish.filter((f) => !f.gone && worldCol(f.d) > -2);
+}
+
+// The R-Type renderer. Draws only: rtypeTick() above owns the rules.
+function renderRtypeFor(cols, sprites) {
+  const Wt = Math.max(20, cols - MARGIN);
+  const hud = Wt >= HUD_MIN_COLS;
+  const W = Wt - (hud ? HUD_SCORE_W + HUD_TROPHY_W : 0);
+  const cells = new Array(W).fill(' ');
+  const taken = new Array(W).fill(false);
+  const wide = sprites ? 3 : 1; // the R-Type sprites are three cells wide
+
+  // Starfield, drifting left a column a second — on a line where the ship
+  // holds station, it is the only thing saying the ship is moving at all.
+  const drift = Math.floor(ticks / 5);
+  for (let i = 0; i < W; i++) {
+    if ((i + drift) % 11 === 3) cells[i] = RT_STAR_COLOR + '·' + PAC_WATER;
+  }
+
+  // Sprites are drawn across two cells, so a claim takes the neighbour with a
+  // real space: the terminal advances one column for these codepoints and the
+  // glyph overdraws the space.
+  const claim = (x, glyph) => {
+    const xi = Math.round(x);
+    if (xi < 0 || xi + wide - 1 > W - 1) return null;
+    for (let i = 0; i < wide; i++) if (taken[xi + i]) return null;
+    cells[xi] = glyph;
+    taken[xi] = true;
+    // The terminal advances one column per codepoint, so the cells the glyph
+    // spills into are claimed with real spaces for it to overdraw.
+    for (let i = 1; i < wide; i++) {
+      cells[xi + i] = ' ';
+      taken[xi + i] = true;
+    }
+    return xi;
+  };
+  // ...and something whose cell is taken shifts over rather than skipping the
+  // frame: at one frame a second, a dropped sprite reads as teleporting.
+  const free = (x, n) => {
+    if (x < 0 || x + n - 1 > W - 1) return false;
+    for (let i = 0; i < n; i++) if (taken[x + i]) return false;
+    return true;
+  };
+  const near = (x, glyph) => {
+    if (x < -1 || x > W) return null; // off the playfield: not somewhere else on it
+    for (const off of [0, wide, -wide]) { // one step at most: see RT_ABREAST
+      const at = claim(Math.round(x) + off, glyph);
+      if (at !== null) return at;
+    }
+    return null;
+  };
+
+  for (const b of booms) {
+    const f = Math.floor((ticks - b.born) / (RT_BOOM_TICKS / 2)) ? 1 : 0;
+    claim(b.x, RT_BOOM_COLOR + (sprites ? SPR_BOOM[f] : UNI_BOOM[f]) + PAC_WATER);
+  }
+
+  if (dying === 0) {
+    // The thrust frame keys off her column, not the clock: a ~1s sample turns
+    // any time-based flicker into a stuck frame anyway, and this way every
+    // visible step of the ship comes with a visible kick of the engine.
+    const t = (Math.round(shipX) + Math.floor(ticks / 8)) % 2;
+    claim(shipX, RT_SHIP_COLOR + (sprites ? SPR_R9[t] : UNI_R9[t]) + PAC_WATER);
+    if (force) claim(Math.round(shipX) + wide, RT_FORCE_COLOR + (sprites ? SPR_FORCE : UNI_RT.force) + PAC_WATER);
+  }
+
+  if (wave) {
+    claim(wave.x, RT_BEAM_COLOR + (sprites ? SPR_WAVE : UNI_RT.wave) + PAC_WATER);
+    for (let x = Math.round(wave.x) - wide; x > wave.x - RT_WAVE_LEN; x -= wide) {
+      claim(x, RT_BEAM_COLOR + (sprites ? SPR_BEAM : UNI_RT.beam) + PAC_WATER);
+    }
+  }
+
+  if (boss) {
+    // Four cells wide, twice anything else on the line: a boss the size of a
+    // drone does not read as a boss.
+    const c = boss.hit > 0 ? '\x1b[0;1;97m' + PAC_BG : RT_BOSS_COLOR;
+    const head = c + (sprites ? SPR_BOSS : UNI_RT.boss) + PAC_WATER;
+    for (const off of [0, -wide, -2 * wide, -3 * wide]) {
+      const x = Math.round(boss.x) + off;
+      if (!sprites) {
+        if (claim(x, head) !== null) break;
+        continue;
+      }
+      if (!free(x, 2 * wide)) continue; // head and body go down together or not at all
+      claim(x, head);
+      claim(x + wide, c + SPR_BOSS_BODY + PAC_WATER);
+      break;
+    }
+  }
+
+  for (const f of fish) {
+    const gun = f.rtKind === 'gunship';
+    near(worldCol(f.d), (gun ? RT_GUNSHIP_COLOR : RT_DRONE_COLOR) +
+      (sprites ? (gun ? SPR_GUNSHIP : SPR_DRONE) : (gun ? UNI_RT.gunship : UNI_RT.drone)) + PAC_WATER);
+  }
+
+  for (const gum of gums) {
+    near(worldCol(gum.g), RT_FORCE_COLOR + (sprites ? SPR_FORCE : UNI_RT.force) + PAC_WATER);
+  }
+
+  for (const s of shots) {
+    near(s.x, RT_SHOT_COLOR + (sprites ? SPR_SHOT : UNI_RT.shot) + PAC_WATER);
+  }
+
+  for (const b of bolts) {
+    near(b.x, RT_BOLT_COLOR + (sprites ? SPR_FOE_SHOT : UNI_RT.foeShot) + PAC_WATER);
+  }
+
+  // The stage card, straight over the middle of the playfield for ~3s. It is
+  // the only thing here that tells you the game has moved on rather than just
+  // gone round again.
+  if (banner > 0) {
+    const msg = 'S T A G E  ' + stage;
+    const at = Math.max(0, Math.floor((W - msg.length) / 2));
+    for (let i = -1; i <= msg.length; i++) {
+      const x = at + i;
+      if (x < 0 || x > W - 1) continue;
+      cells[x] = RT_BANNER_COLOR + (msg[i] || ' ') + PAC_WATER;
+    }
+  }
+
+  let line = PAC_WATER;
+  if (hud) {
+    line += RT_BEAM_COLOR + '1UP ' + HUD_COLOR + String(Math.min(scores.rt, 999999)).padStart(6) + PAC_WATER + '  ';
+  }
+  line += cells.join('');
+  if (hud) line += trophySlot('rt');
+  writeFrame(cols, line + '\x1b[0m');
+}
+
 // The Ms. Pac-Man renderer, shared by the Unicode and sprite editions. It only
 // draws: every rule lives in interact(), above.
 function renderPacFor(cols, sprites) {
@@ -1332,7 +1848,7 @@ function renderPacFor(cols, sprites) {
   }
   line += cells.join('');
   if (hud) {
-    line += trophySlot(false);
+    line += trophySlot('pac');
   }
   writeFrame(cols, line + '\x1b[0m');
 }
@@ -1388,7 +1904,7 @@ function renderFrogFor(cols) {
   }
   line += cells.join('');
   if (hud) {
-    line += trophySlot(true);
+    line += trophySlot('frog');
   }
   writeFrame(cols, line + '\x1b[0m');
 }
@@ -1398,23 +1914,27 @@ function renderFrogFor(cols) {
 // flashing while the user is typing is a distraction, not an attract mode.
 // The "off" phase dims instead of vanishing so the text survives the ~1s
 // refresh aliasing whatever moment it samples.
-function renderAttractFor(cols, frog) {
+function renderAttractFor(cols, kind) {
   const Wt = Math.max(20, cols - MARGIN);
   const hud = Wt >= HUD_MIN_COLS;
   const W = Wt - (hud ? HUD_SCORE_W + HUD_TROPHY_W : 0);
   const msg = W >= 27 ? 'I N S E R T   C O I N' : 'INSERT COIN';
   const age = ticks - lastEventTick - IDLE_ATTRACT; // ticks since attract began
   const on = age >= 20 || Math.floor(age / 5) % 2 === 1; // dim/bright twice (~4s), then steady
-  const style = frog
-    ? (on ? '\x1b[0;1;92m' : '\x1b[0;2;32m') + PAC_BG
-    : (on ? '\x1b[0;1;38;5;208m' : '\x1b[0;2;33m') + PAC_BG;
+  const style = (kind === 'frog'
+    ? (on ? '\x1b[0;1;92m' : '\x1b[0;2;32m')
+    : kind === 'rt'
+      ? (on ? '\x1b[0;1;96m' : '\x1b[0;2;36m')
+      : (on ? '\x1b[0;1;38;5;208m' : '\x1b[0;2;33m')) + PAC_BG;
+  const score = kind === 'frog' ? scores.frog : kind === 'rt' ? scores.rt : scores.pac;
+  const tint = kind === 'frog' ? '\x1b[0;92m' : kind === 'rt' ? '\x1b[0;96m' : '\x1b[0;91m';
   const pad = Math.max(0, Math.floor((W - msg.length) / 2));
   let line = PAC_WATER;
   // The cabinet keeps the running game's own HUD — the 1UP tint and the
   // trophies belong to the game you just stopped playing, not to Ms. Pac-Man.
-  if (hud) line += (frog ? '\x1b[0;92m' : '\x1b[0;91m') + PAC_BG + '1UP ' + HUD_COLOR + String(Math.min(frog ? scores.frog : scores.pac, 999999)).padStart(6) + PAC_WATER + '  ';
+  if (hud) line += tint + PAC_BG + '1UP ' + HUD_COLOR + String(Math.min(score, 999999)).padStart(6) + PAC_WATER + '  ';
   line += ' '.repeat(pad) + style + msg + PAC_WATER + ' '.repeat(Math.max(0, W - pad - msg.length));
-  if (hud) line += trophySlot(frog);
+  if (hud) line += trophySlot(kind);
   writeFrame(cols, line + '\x1b[0m');
 }
 
@@ -1588,13 +2108,15 @@ function render() {
   const cols = maxCols; // the loaded world's own window — its only view
   const t = theme();
   const frog = /frog/.test(t);
+  const rt = isRtype(t);
   const wopr = /wopr/.test(t);
   const woprIdle = wopr && attractNow() && !demoOn();
   // demoing already means attract fired and demo mode took it over: the reel
   // draws the game, not the coin screen.
-  const attract = !demoing && (isPacTheme(t) || frog) && attractNow();
+  const attract = !demoing && (isPacTheme(t) || frog || rt) && attractNow();
   if (wopr) renderWoprFor(cols, woprIdle);
-  else if (attract) renderAttractFor(cols, frog);
+  else if (attract) renderAttractFor(cols, frog ? 'frog' : rt ? 'rt' : 'pac');
+  else if (rt) renderRtypeFor(cols, spriteFont());
   else if (isPacTheme(t)) renderPacFor(cols, spriteFont());
   else if (frog) renderFrogFor(cols);
   else if (/safari/.test(t)) renderSafariFor(cols);
@@ -1671,11 +2193,12 @@ function simulate(w) {
   const t = theme();
   const pacTheme = isPacTheme(t);
   const frogTheme = /frog/.test(t);
+  const rtypeTheme = isRtype(t);
   const woprTheme = /wopr/.test(t);
   // Attract mode: with Claude quiet (waiting on the user, or a session just
   // opened), the game freezes and the statusline says INSERT COIN. The first
   // transcript event unfreezes it exactly where it stopped.
-  const attract = (pacTheme || frogTheme) && attractNow();
+  const attract = (pacTheme || frogTheme || rtypeTheme) && attractNow();
   const demo = attract && demoOn();
   // Enter on the first idle tick, leave the moment demo stops applying —
   // Claude spoke again, or the user switched demo off mid-reel.
@@ -1706,7 +2229,7 @@ function simulate(w) {
   const blinky = fish.find((g) => g.ghostIdx === 0 && !g.eaten);
 
   for (const f of fish) {
-    if (frogTheme) {
+    if (frogTheme || rtypeTheme) {
       f.d += f.speed; // steady traffic, no lane fatigue
     } else if (f.eaten) {
       f.d -= 0.4; // eyes hustle home to the right
@@ -1733,9 +2256,11 @@ function simulate(w) {
       f.speed = Math.max(0.2, f.speed * 0.99);
     }
   }
-  fish = fish.filter((f) => f.d < maxCols && f.d > -1);
+  fish = fish.filter((f) => f.d < maxCols && f.d > (rtypeTheme ? -12 : -1));
 
-  if (frogTheme) {
+  if (rtypeTheme) {
+    rtypeTick(); // the ship, its fire and the Bydo all in one place
+  } else if (frogTheme) {
     if (squash > 0) {
       squash--;
       if (squash === 0) frogD = 0; // scraped off the road; back to the left bank
@@ -1814,14 +2339,17 @@ function simulate(w) {
   }
 
   gums = gums.filter((gum) => ticks - gum.born < GUM_LIFE);
-  if (!fruit && --fruitTimer <= 0) {
-    const idx = fruitIdx++ % FRUITS.length;
-    fruit = { e: 0, glyph: FRUITS[idx], idx };
-    fruitTimer = FRUIT_EVERY_TICKS;
-  }
-  if (fruit) {
-    fruit.e += 0.2;
-    if (fruit.e > maxCols) fruit = null;
+  // Fruit is Ms. Pac-Man's and the frog's; R-Type's own timer is the boss.
+  if (!rtypeTheme) {
+    if (!fruit && --fruitTimer <= 0) {
+      const idx = fruitIdx++ % FRUITS.length;
+      fruit = { e: 0, glyph: FRUITS[idx], idx };
+      fruitTimer = FRUIT_EVERY_TICKS;
+    }
+    if (fruit) {
+      fruit.e += 0.2;
+      if (fruit.e > maxCols) fruit = null;
+    }
   }
 
   interact(pacTheme, frogTheme);

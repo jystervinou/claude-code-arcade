@@ -4,8 +4,8 @@
 // Claude Code owns the keyboard while it has focus, so the TTY joystick
 // (`arcade play`) can't steer from that window. This is the smallest honest
 // workaround: a listen-only NSEvent global monitor that reacts to exactly
-// three keycodes — F1 (left), F2 (right), F3 (boost) — and writes one letter
-// to ~/.arcade/input for the daemon to poll. Nothing else is read, kept, or
+// three keycodes — F1 (left), F2 (right), F3 (boost, and the fire button in
+// R-Type) — and writes one letter to ~/.arcade/input for the daemon to poll. Nothing else is read, kept, or
 // sent anywhere, and the keystrokes still reach the focused app (a
 // listen-only monitor cannot swallow them).
 //
@@ -40,6 +40,6 @@ NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { ev in
         try? c.write(to: input, atomically: true, encoding: .utf8)
     }
 }
-print("global joystick on: F1 ← · F2 → · F3 boost — steers from any window; ctrl+c stops")
+print("global joystick on: F1 ← · F2 → · F3 boost (fire, in R-Type) — steers from any window; ctrl+c stops")
 print("(if F1 changes brightness instead, press fn+F1 — your F-row is on its media defaults)")
 app.run()

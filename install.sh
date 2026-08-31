@@ -155,7 +155,9 @@ ln -sfn "$SRC/arcade" "$CLI"
 say "cli" "~/.local/bin/arcade"
 
 # The sprite font upgrades mspacman from Unicode glyphs to pixel sprites, and
-# frogger needs it outright — its whole cast lives only in that font.
+# frogger needs it outright — its whole cast lives only in that font. R-Type's
+# is the reason it exists at all: one line at one frame a second leaves the
+# sprite doing all the work.
 mkdir -p "$FONTDIR"
 cp "$SRC/ArcadeSprites.ttf" "$FONTDIR/ArcadeSprites.ttf"
 say "font" "~${FONTDIR#$HOME}/ArcadeSprites.ttf"
@@ -216,6 +218,7 @@ echo "    arcade start              the window tells you its own id while it wai
 echo
 echo "  And pick a game:"
 echo "    arcade theme mspacman     Ms. Pac-Man (the default)"
+echo "    arcade theme rtype        R-Type — the R-9 against Claude's Bydo"
 echo "    arcade theme frogger      Frogger"
 echo "    arcade theme wopr         W.O.P.R. — shall we play a game?"
 echo "    arcade theme aquarium     fish"

@@ -109,8 +109,9 @@ case "$1" in
       safari) t=safari; label="safari 🦁" ;;
       mspacman|pacman|arcade) t=mspacman; label="ms. pac-man" ;;
       frogger) t=frogger; label="frogger" ;;
+      rtype|r-type|shooter) t=rtype; label="r-type" ;;
       wopr|wargames) t=wopr; label="w.o.p.r.  shall we play a game?" ;;
-      *) echo "usage: arcade theme aquarium|safari|mspacman|frogger|wopr [session]"; exit 1 ;;
+      *) echo "usage: arcade theme aquarium|safari|mspacman|rtype|frogger|wopr [session]"; exit 1 ;;
     esac
     if [ -n "${3:-}" ]; then
       id="$(resolve "$3")" || exit 1
@@ -127,6 +128,7 @@ case "$1" in
     case "$t" in
       mspacman) have_font || echo "  tip: arcade font install — real pixel sprites instead of Unicode" ;;
       frogger) have_font || echo "  needs the sprite font — run: arcade font install" ;;
+      rtype) have_font || echo "  tip: arcade font install — without it the R-9 and the Bydo are Unicode stand-ins" ;;
     esac
     off_hint ;;
   font)
@@ -205,17 +207,18 @@ case "$1" in
       hi="$(cat "$ARCADE/state.json")"
       pac="$(printf '%s' "$hi" | sed -nE 's/.*"pac":([0-9]+).*/\1/p')"
       frog="$(printf '%s' "$hi" | sed -nE 's/.*"frog":([0-9]+).*/\1/p')"
-      echo "best:   pac ${pac:-0} · frog ${frog:-0}  (all time)"
+      rt="$(printf '%s' "$hi" | sed -nE 's/.*"rt":([0-9]+).*/\1/p')"
+      echo "best:   pac ${pac:-0} · frog ${frog:-0} · r-type ${rt:-0}  (all time)"
     fi
     echo
     n=0
     for k in $(sessions); do
       n=$((n + 1))
-      [ "$n" = 1 ] && printf '   %-10s %-5s %-12s %-9s %s\n' ID COLS STATE THEME 'SCORE pac/frog'
+      [ "$n" = 1 ] && printf '   %-10s %-5s %-12s %-9s %s\n' ID COLS STATE THEME 'SCORE pac/frog/r-type'
       cols="$(sed -n 2p "$ARCADE/tanks/$k.path" 2>/dev/null)"
       th="$(cat "$(session_dir "$k")/theme" 2>/dev/null || cat "$ARCADE/theme" 2>/dev/null || echo sea)"
       if [ -f "$ARCADE/play/$k" ]; then state=playing; else state="insert coin"; fi
-      sc="$(sed -nE "s/.*\"key\":\"$k\"[^}]*\"pac\":([0-9]+),\"frog\":([0-9]+).*/\1 \/ \2/p" "$ARCADE/live.json" 2>/dev/null)"
+      sc="$(sed -nE "s/.*\"key\":\"$k\"[^}]*\"pac\":([0-9]+),\"frog\":([0-9]+),\"rt\":([0-9]+).*/\1 \/ \2 \/ \3/p" "$ARCADE/live.json" 2>/dev/null)"
       printf '   %-10s %-5s %-12s %-9s %s\n' "$(short "$k")" "${cols:-?}" "$state" "$th" "${sc:--}"
     done
     if [ "$n" = 0 ]; then echo "  no Claude Code sessions open"
@@ -225,7 +228,7 @@ case "$1" in
     echo "  arcade start [session]        put a coin in — a new window plays nothing until you do"
     echo "  arcade stop [session]         game over"
     echo "  arcade reset [session]        start the game over (WOPR restarts the film)"
-    echo "  arcade theme NAME [session]   aquarium|safari|mspacman|frogger|wopr"
+    echo "  arcade theme NAME [session]   aquarium|safari|mspacman|rtype|frogger|wopr"
     echo "  arcade demo on|off [session]  attract reel: play on while Claude is idle"
     echo "  arcade play [session]         joystick (this pane only)"
     echo "  arcade play global            F1/F2/F3 steer from any window"
