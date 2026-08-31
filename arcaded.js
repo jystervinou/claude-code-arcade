@@ -576,6 +576,11 @@ let fish = []; // {d, speed, seaGlyph, safariGlyph, ghostIdx, hue, eaten, rev}
 // long silence attracts regardless (missing stop_reason, dead session).
 // Starts idle: a fresh session shows INSERT COIN until Claude moves.
 const IDLE_ATTRACT = parseInt(process.env.ARCADE_ATTRACT_TICKS, 10) || 25; // ~5s after reply end
+// How long the joystick owns the game after a keypress, before the auto-pilot
+// takes the wheel back. (R-Type steers on a much shorter leash of its own —
+// see RT_STEER_TICKS — because a shooter that stops dodging for half a minute
+// after one tap just dies.)
+const PLAYER_HOLD = 150; // ~30s
 const STALL_ATTRACT = 1500; // ~5min of nothing at all
 let lastEventTick = -1e9;
 let replyDone = true;
@@ -842,23 +847,26 @@ function trophySlot(kind) {
     return ' '.repeat(7 - n) + FROG_COLOR + SPR_FROG.sit.repeat(n) + PAC_WATER;
   }
   if (kind === 'rt') {
-    // While a boss is up, the slot is its health instead: the beam meter can
-    // wait, and what you want to know is whether the thing is nearly dead.
+    // Seven columns: the Force pip, then a bracketed four-segment gauge. The
+    // brackets are the whole point — an unframed row of full blocks butts
+    // together into one solid rectangle, which reads as a mystery shape rather
+    // than as a meter filling up. Cyan is the wave cannon charging, white is
+    // it loaded, red is the boss's health while there is a boss (what you want
+    // to know then is whether the thing is nearly dead, not when your beam is
+    // ready). It never blinks: a ~1s sampler turns any blink into noise, and
+    // this is the one gauge anybody actually reads.
+    const n = 4;
+    const frame = '\x1b[0;2;37m' + PAC_BG;
+    const pip = force ? RT_FORCE_COLOR + '◉' : ' ';
+    const gauge = (lit, on, off) =>
+      frame + '[' + on + '█'.repeat(lit) + off + '·'.repeat(n - lit) + frame + ']' + PAC_WATER;
     if (boss) {
-      const left = Math.max(1, Math.round((boss.hp / (boss.max || RT_BOSS_HP)) * 5));
-      return '  ' + RT_BOLT_COLOR + '█'.repeat(left) +
-        '\x1b[0;2;31m' + PAC_BG + '·'.repeat(5 - left) + PAC_WATER;
+      const left = Math.max(1, Math.round((boss.hp / (boss.max || RT_BOSS_HP)) * n));
+      return pip + gauge(left, RT_BOLT_COLOR, '\x1b[0;2;31m' + PAC_BG);
     }
-    // The cabinet's beam meter: five cells filling as the wave cannon charges,
-    // white the moment it is loaded, with the Force lit beside it when the pod
-    // is riding the nose. It does not blink — a ~1s sampler turns any blink
-    // into random noise, and this is the one gauge you actually read.
-    const n = 5;
-    const lit = Math.min(n, Math.floor((charge / RT_CHARGE_FULL) * n));
     const ready = charge >= RT_CHARGE_FULL;
-    const bar = (ready ? '\x1b[0;1;97m' : RT_BEAM_COLOR) + '█'.repeat(lit) +
-      '\x1b[0;2;34m' + PAC_BG + '·'.repeat(n - lit);
-    return (force ? RT_FORCE_COLOR + '◉' : ' ') + ' ' + bar + PAC_WATER;
+    const lit = Math.min(n, Math.floor((charge / RT_CHARGE_FULL) * n));
+    return pip + gauge(lit, ready ? '\x1b[0;1;97m' + PAC_BG : RT_BEAM_COLOR, '\x1b[0;2;34m' + PAC_BG);
   }
   const t = eatenFruits.slice(-3);
   return ' '.repeat(7 - 2 * t.length) + t.join(''); // fruit emoji are 2 cells each
@@ -2266,7 +2274,7 @@ function simulate(w) {
       if (squash === 0) frogD = 0; // scraped off the road; back to the left bank
     } else {
       pollInput();
-      if (ticks - lastInputTick > 150) pacDir = 1; // auto-pilot resumes ~30s after input
+      if (ticks - lastInputTick > PLAYER_HOLD) pacDir = 1; // auto-pilot resumes ~30s after input
       frogD += 0.2 * pacDir * (boost > 0 ? 3 : 1);
       if (frogD < 0) frogD = 0;
       if (boost > 0) boost--;
@@ -2285,7 +2293,7 @@ function simulate(w) {
     // never at random. Escape outranks appetite. The cooldown keeps her from
     // flip-flopping while a threat sits just inside range, and the joystick
     // still owns her for ~30s per input.
-    if (ticks - lastInputTick > 150 && ticks - lastUturnTick > 25) {
+    if (ticks - lastInputTick > PLAYER_HOLD && ticks - lastUturnTick > 25) {
       const lap = mazeWidth() - 1;
       const p = ((Math.round(pacD) % lap) + lap) % lap; // cols from the right, same space as f.d
       let ahead = Infinity; // gap to the nearest hungry ghost the way she is headed
