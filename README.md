@@ -14,9 +14,10 @@ played by whatever Claude is doing in *that* session.
 Or WOPR, from WarGames, which types its way through the film while Claude works:
 the logon, the list of games, and a game of Global Thermonuclear War.
 
-[![Ms. Pac-Man running in the Claude Code status line](docs/ms-pacman.png)](docs/ms-pacman.mp4)
+![Ms. Pac-Man running in the Claude Code status line](docs/ms-pacman.gif)
 
-*Click it for [twenty seconds of it running](docs/ms-pacman.mp4).*
+*Twenty seconds of the attract reel, playing itself while Claude is idle.
+[Still](docs/ms-pacman.png) · [MP4](docs/ms-pacman.mp4).*
 
 ## Setup
 
