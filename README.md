@@ -44,13 +44,37 @@ arcade theme aquarium   🐟🐠🐡🦐🦀🦞🪼 / 🦈🐋🐳🐬🐙🦑�
 arcade theme safari     🐒🦩🐍🦌🦂🦡🦅 / 🐘🦒🦏🦛🐆🦓🐃🦍🐊🐪
 arcade demo on          keep playing while Claude is idle
 arcade play             joystick (optional)
+arcade off              switch the arcade off; arcade on switches it back
 arcade status           what's running
 ```
+
+Those are ordinary shell commands. Run them in any terminal, or straight from
+the Claude Code prompt with a `!` in front — `!arcade theme frogger` runs it in
+your session's shell without leaving Claude Code. The one exception is
+`arcade play`, which takes the keyboard over and so wants a spare terminal pane
+of its own.
 
 Switch any time — it takes effect live.
 
 She plays herself: laps the maze, eats the dots, runs from ghosts, doubles back
 for fruit. Real arcade scoring, kept between sessions, one score per game.
+
+## Switching it off
+
+```
+arcade off
+```
+
+Stops the daemon and blanks the status line, without uninstalling anything:
+your theme, your scores and the font all stay where they are, and nothing runs
+in the background until you say so.
+
+```
+arcade on
+```
+
+Brings it back within a second — the status line starts the daemon again on its
+next refresh. `arcade status` says which way the switch is set.
 
 ## Taking the joystick (optional, and fiddly)
 
@@ -95,7 +119,7 @@ neither of which needs a font at all.
 A small daemon watches your sessions and writes one frame every 200ms;
 `statusline.sh` just prints the current one. All your open Claude Code windows
 share the same world, and the daemon shuts itself down two minutes after the
-last one closes.
+last one closes — or the moment you run `arcade off`.
 
 ## Settings
 

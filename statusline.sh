@@ -4,6 +4,19 @@
 # tail and how wide this terminal is, keeps the daemon alive, and prints the
 # frame rendered for this width. Must stay fast: it runs on every refresh.
 ARCADE="$HOME/.arcade"
+
+# The off switch (`arcade off`), checked before anything else: while it is off
+# this prints nothing and — the part that matters — does not restart the daemon
+# below. Read with shell builtins only; this runs on every single refresh.
+# A missing file means on, so an install that never flipped it plays.
+en=on
+[ -f "$ARCADE/enabled" ] && read -r en < "$ARCADE/enabled"
+case "$en" in
+  [Oo][Ff][Ff]|0|[Ff]alse|[Nn]o)
+    cat > /dev/null # drain the statusline JSON rather than leave it a broken pipe
+    exit 0 ;;
+esac
+
 # No personal paths: probe PATH first, then the usual install locations
 # (statusline processes don't always inherit an interactive shell's PATH).
 NODE="$(command -v node 2>/dev/null)"

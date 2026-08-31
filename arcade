@@ -9,6 +9,30 @@ FONT_MAC="$HOME/Library/Fonts/ArcadeSprites.ttf"
 FONT_LINUX="$HOME/.local/share/fonts/ArcadeSprites.ttf"
 have_font() { [ -f "$FONT_MAC" ] || [ -f "$FONT_LINUX" ]; }
 
+# The on/off switch lives in ~/.arcade/enabled. A missing file means on, so an
+# install that never touched the switch — and every upgrade from before there
+# was one — plays.
+arcade_off() { [ -f "$ARCADE/enabled" ] && grep -qiE '^(off|0|false|no)' "$ARCADE/enabled"; }
+# `&&` alone would make an on arcade the last (failing) command of the branch,
+# so the whole script would exit 1 on a plain `arcade theme wopr`.
+off_hint() { arcade_off && echo "  note: the arcade is off — run: arcade on"; return 0; }
+
+# Stop the daemon for real rather than waiting for it to notice the switch:
+# "off" should mean the process is gone by the time the command returns. It
+# holds no state beyond ~/.arcade/state.json, which it writes as it goes.
+stop_daemon() {
+  p="$(cat "$ARCADE/pid" 2>/dev/null)"
+  if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
+    kill "$p" 2>/dev/null
+    n=0
+    while kill -0 "$p" 2>/dev/null && [ "$n" -lt 20 ]; do sleep 0.1; n=$((n + 1)); done
+    kill -0 "$p" 2>/dev/null && kill -9 "$p" 2>/dev/null
+  fi
+  # The daemon dies on the signal without running its own cleanup, so the pid
+  # file and the last frames are ours to sweep up.
+  rm -f "$ARCADE/pid" "$ARCADE"/frame.*
+}
+
 case "$1" in
   theme)
     case "$2" in
@@ -30,7 +54,8 @@ case "$1" in
       wopr|wargames)
         printf 'wopr\n' > "$ARCADE/theme"; echo "theme → w.o.p.r.  shall we play a game?" ;;
       *) echo "usage: arcade theme aquarium|safari|mspacman|frogger|wopr"; exit 1 ;;
-    esac ;;
+    esac
+    off_hint ;;
   font)
     # ArcadeSprites.ttf is a plain user font: one small file in the user font
     # dir, nothing system-level, removal reverts everything.
@@ -65,14 +90,31 @@ case "$1" in
       off) printf 'off\n' > "$ARCADE/demo"; echo "demo → off (idle shows INSERT COIN)" ;;
       ''|status) echo "demo:   $(cat "$ARCADE/demo" 2>/dev/null || echo off)" ;;
       *) echo "usage: arcade demo on|off"; exit 1 ;;
-    esac ;;
+    esac
+    off_hint ;;
+  on|start|enable)
+    mkdir -p "$ARCADE"
+    printf 'on\n' > "$ARCADE/enabled"
+    echo "arcade → on (the statusline picks it back up within a second)" ;;
+  off|stop|disable)
+    mkdir -p "$ARCADE"
+    # Flag first, then kill: a statusline refresh racing this would otherwise
+    # start a fresh daemon a moment after we stopped the old one. Written the
+    # other way round, the new daemon reads "off" at startup and stands down.
+    printf 'off\n' > "$ARCADE/enabled"
+    stop_daemon
+    echo "arcade → off (daemon stopped, status line blank)"
+    echo "  arcade on   brings it back — your theme, scores and settings are kept" ;;
   status)
+    if arcade_off; then echo "arcade: off (arcade on to start it)"; else echo "arcade: on"; fi
     echo "theme:  $(cat "$ARCADE/theme" 2>/dev/null || echo sea)"
     if have_font; then echo "font:   installed (pixel sprites)"
     else echo "font:   not installed — Unicode glyphs (arcade font install)"; fi
     echo "demo:   $(cat "$ARCADE/demo" 2>/dev/null || echo off)"
     p="$(cat "$ARCADE/pid" 2>/dev/null)"
-    if kill -0 "$p" 2>/dev/null; then echo "daemon: running (pid $p)"; else echo "daemon: stopped (statusline revives it)"; fi
+    if kill -0 "$p" 2>/dev/null; then echo "daemon: running (pid $p)"
+    elif arcade_off; then echo "daemon: stopped (the arcade is off)"
+    else echo "daemon: stopped (statusline revives it)"; fi
     echo "tanks:  $(ls "$ARCADE/tanks" 2>/dev/null | wc -l | tr -d ' ') session(s)"
     if [ -f "$ARCADE/state.json" ]; then
       s="$(cat "$ARCADE/state.json")"
@@ -91,5 +133,7 @@ case "$1" in
     echo "  arcade play                                         joystick (this pane only)"
     echo "  arcade play global                                  F1/F2/F3 steer from any window"
     echo "  arcade demo on|off                                  attract reel: play on while Claude is idle"
+    echo "  arcade off                                          switch the arcade off (stops the daemon)"
+    echo "  arcade on                                           switch it back on"
     echo "  arcade status                                       daemon + theme + sessions + scores" ;;
 esac

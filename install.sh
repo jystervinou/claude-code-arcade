@@ -161,6 +161,9 @@ cp "$SRC/ArcadeSprites.ttf" "$FONTDIR/ArcadeSprites.ttf"
 say "font" "~${FONTDIR#$HOME}/ArcadeSprites.ttf"
 
 [ -f "$ARCADE/theme" ] || printf 'mspacman\n' > "$ARCADE/theme"
+# Running the installer is a request for the arcade to be ON: an `arcade off`
+# from a previous life must not leave a fresh install with a blank status line.
+printf 'on\n' > "$ARCADE/enabled"
 
 # Rewrite settings.json with node rather than sed: it is the user's real config
 # and every other key has to survive untouched.
@@ -215,5 +218,6 @@ echo "    arcade theme wopr         W.O.P.R. — shall we play a game?"
 echo "    arcade theme aquarium     fish"
 echo "    arcade theme safari       savanna"
 echo "    arcade demo on            keep playing while Claude is idle"
+echo "    arcade off                switch it off (stops the daemon); arcade on brings it back"
 echo "    arcade status             what is running"
 echo

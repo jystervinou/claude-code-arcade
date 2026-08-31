@@ -36,6 +36,7 @@ const THEME = path.join(ARCADE, 'theme');
 const STATE = path.join(ARCADE, 'state.json');
 const INPUT = path.join(ARCADE, 'input');
 const DEMO = path.join(ARCADE, 'demo');
+const ENABLED = path.join(ARCADE, 'enabled');
 
 const TICK_MS = 200;
 // Claude Code's statusline area is a few columns narrower than the COLUMNS it
@@ -77,6 +78,20 @@ function claimPid() {
   }
   return false;
 }
+
+// The off switch (~/.arcade/enabled, written by `arcade off`). statusline.sh
+// checks it too and stops starting us, but a refresh already in flight can
+// still land here a moment after the switch was thrown — so check before
+// claiming the pid file, and again every tick, and go quietly either way.
+// A missing file means on: installs from before the switch existed play.
+function enabled() {
+  try {
+    return !/^(off|0|false|no)/i.test(fs.readFileSync(ENABLED, 'utf8').trim());
+  } catch {
+    return true;
+  }
+}
+if (!enabled()) process.exit(0);
 if (!claimPid()) process.exit(0);
 
 // Aquarium: Reads spawn the small reef; Writes/Edits spawn the big beasts.
@@ -176,15 +191,18 @@ const WOPR_CURSOR = '█'; // solid block, as in the film
 // Claude is working, which is when those are densest, so the sampling rate is
 // somewhere between 1 and 3 frames a second and not ours to set.
 //
-// What IS ours is characters per second, and the first cut of this got it
-// wrong in the interesting direction: 40 c/s put a whole clause on screen per
-// repaint, which sounds ideal and read as a blur — the line finished and was
-// gone before you could take it in. The constraint is not "is motion visible"
-// but "does a FINISHED line stay up long enough to read", and at 1 fps that
-// means seconds, not frames. Hence half the speed and twice the rest below.
+// What IS ours is characters per second, and both ends of that are wrong. The
+// first cut typed at 40 c/s, which sounds ideal and read as a blur: a whole
+// clause per repaint, the line finished and gone before you could take it in.
+// The fix for that overshot the other way — 15 c/s under a five-second floor
+// is nine seconds a line, and the film stops feeling like a machine answering
+// and starts feeling like a machine thinking about it. The constraint is not
+// "is motion visible" but "does a FINISHED line stay up long enough to read",
+// and a line you have already read is dead air. So: type at a clip you can
+// still follow, rest for about as long as reading it takes.
 const WOPR_SPEED = parseFloat(process.env.ARCADE_WOPR_SPEED) || 1;
-const WOPR_SYS_RATE = (15 / 5) * WOPR_SPEED; // chars per 200ms tick
-const WOPR_USR_RATE = (7 / 5) * WOPR_SPEED; // a person, hunting for the keys
+const WOPR_SYS_RATE = (23 / 5) * WOPR_SPEED; // chars per 200ms tick
+const WOPR_USR_RATE = (11 / 5) * WOPR_SPEED; // a person, hunting for the keys
 const WOPR_HOLD = 12; // what a beat rests for when the script doesn't say
 // Every rest in the script is stretched by this and then floored. Two separate
 // knobs because they fix two separate complaints: the SCALE is why a finished
@@ -194,8 +212,9 @@ const WOPR_HOLD = 12; // what a beat rests for when the script doesn't say
 // The scale is a multiplier rather than a bigger default so the script keeps
 // its emphasis: the last line of the film still rests five times as long as a
 // row of the timetable.
-const WOPR_HOLD_SCALE = 3;
-const WOPR_HOLD_MIN = 25; // 5s, the shortest a finished line is ever up
+const WOPR_HOLD_SCALE = 2;
+const WOPR_HOLD_MIN = 14; // ~2.8s, the shortest a finished line is ever up —
+// two or three statusline repaints, so a short line is never merely glimpsed
 
 // Rests scale with the speed knob too, so ARCADE_WOPR_SPEED fast-forwards the
 // whole arc rather than just the typing — the rests are most of its length.
@@ -1454,6 +1473,22 @@ function render() {
 let lastFresh = Date.now();
 
 function tick() {
+  // Switched off under us — `arcade off` kills the daemon itself, but it also
+  // has to work when the file is edited by hand, or when this process is the
+  // one a racing statusline refresh started. Leave nothing behind: a stale
+  // frame would be the first thing shown on the way back on.
+  if (!enabled()) {
+    saveState();
+    try {
+      for (const n of fs.readdirSync(ARCADE)) {
+        if (/^frame(\.|$)/.test(n)) fs.unlinkSync(path.join(ARCADE, n));
+      }
+    } catch {}
+    try {
+      fs.unlinkSync(PID);
+    } catch {}
+    process.exit(0);
+  }
   ticks++;
   if (scanTanks() > 0) {
     lastFresh = Date.now();
