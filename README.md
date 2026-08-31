@@ -56,6 +56,7 @@ one you mean, and the `!` runs it without leaving Claude Code.
 ```
 arcade start            put a coin in (the id is in the status line)
 arcade stop             game over
+arcade reset            start this window's game over (WOPR restarts the film)
 arcade theme mspacman   Ms. Pac-Man
 arcade theme frogger    Frogger
 arcade theme wopr       W.O.P.R., typing its way through WarGames

@@ -42,6 +42,9 @@ const ENABLED = path.join(ARCADE, 'enabled');
 const PLAY = path.join(ARCADE, 'play');
 // What the CLI reads to list what is running: one line of truth per window.
 const LIVE = path.join(ARCADE, 'live.json');
+// `arcade reset` drops a file here; the world it names starts over on the next
+// tick — fresh credit, empty maze, and WOPR back at the logon screen.
+const RESET = path.join(ARCADE, 'reset');
 
 const TICK_MS = 200;
 // Claude Code's statusline area is a few columns narrower than the COLUMNS it
@@ -994,7 +997,18 @@ function scanTanks() {
       w.cols = cols;
       w.tp = tp;
       const playing = fs.existsSync(path.join(PLAY, key));
-      if (playing && !w.playing) Object.assign(w, newWorld(tp, cols), { key, tp, cols, offset: w.offset, partial: w.partial }); // a fresh credit
+      const resetting = fs.existsSync(path.join(RESET, key));
+      // A fresh credit: on the coin that starts a stopped game, or on request.
+      // The tail position is carried over — starting over is not a reason to
+      // replay the whole transcript back onto the line.
+      if (resetting || (playing && !w.playing)) {
+        Object.assign(w, newWorld(tp, cols), { key, tp, cols, offset: w.offset, partial: w.partial });
+        if (resetting) {
+          try {
+            fs.unlinkSync(path.join(RESET, key));
+          } catch {}
+        }
+      }
       w.playing = playing;
     } else {
       const fresh = newWorld(tp, cols);

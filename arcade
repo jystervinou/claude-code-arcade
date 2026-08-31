@@ -81,6 +81,18 @@ case "$1" in
     touch "$ARCADE/play/$id"
     echo "game on — $(short "$id")"
     off_hint ;;
+  reset)
+    # Start the current game over without stopping it: score back to zero, the
+    # maze cleared, and WOPR back to the school district computer.
+    mkdir -p "$ARCADE/reset"
+    if [ -n "${2:-}" ]; then
+      id="$(resolve "$2")" || exit 1
+      touch "$ARCADE/reset/$id"
+      echo "reset — $(short "$id")"
+    else
+      for k in $(sessions); do touch "$ARCADE/reset/$k"; done
+      echo "reset — every window"
+    fi ;;
   stop)
     id="${2:-}"
     if [ -n "$id" ]; then
@@ -212,6 +224,7 @@ case "$1" in
     echo "arcade — Claude Code Arcade: one game per window, in the status line"
     echo "  arcade start [session]        put a coin in — a new window plays nothing until you do"
     echo "  arcade stop [session]         game over"
+    echo "  arcade reset [session]        start the game over (WOPR restarts the film)"
     echo "  arcade theme NAME [session]   aquarium|safari|mspacman|frogger|wopr"
     echo "  arcade demo on|off [session]  attract reel: play on while Claude is idle"
     echo "  arcade play [session]         joystick (this pane only)"

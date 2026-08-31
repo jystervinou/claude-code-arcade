@@ -143,7 +143,7 @@ echo
 echo "Claude Code Arcade"
 echo
 
-mkdir -p "$ARCADE/tanks" "$ARCADE/play" "$ARCADE/sessions"
+mkdir -p "$ARCADE/tanks" "$ARCADE/play" "$ARCADE/sessions" "$ARCADE/reset"
 ln -sfn "$SRC/arcaded.js" "$ARCADE/arcaded.js"
 ln -sfn "$SRC/arcadectl.js" "$ARCADE/arcadectl.js"
 ln -sfn "$SRC/statusline.sh" "$ARCADE/statusline.sh"
